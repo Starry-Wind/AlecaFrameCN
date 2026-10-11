@@ -1,15 +1,15 @@
 # AlecaFrame 简体中文补丁
 
-给通过 Overwolf 官方商店安装的 AlecaFrame 加载简体中文界面，并支持在中文 Warframe 中识别遗物奖励。
+给通过 Overwolf 官方商店安装的 AlecaFrame 加载简体中文界面
 
-- 加载简体中文界面。
-- 支持在**中文与英文** Warframe 中识别遗物奖励。
+- 支持**简体中文界面**。
+- 支持在**中文游戏**中识别中文遗物奖励显示铸造部件、持有与所需数量、制作状态和套装价格。
 - 支持**中文游戏**的**交易历史解析**与**交易物品名称**汉化。
 - 鉴于作者还是萌新，当前汉化仍然不完全（黑话、随机紫卡名称），欢迎各位大佬贡献。
 
 ## 使用方法
 
-1. 先通过 Overwolf 官方商店安装 AlecaFrame，并正常打开、等待游戏数据加载完成。
+1. 先通过 Overwolf 官方商店安装 [AlecaFrame](https://alecaframe.com/)，并正常打开、等待游戏数据加载完成。
 2. 解压本包，**双击 `启动中文版.cmd`**。之后每次都用它启动中文版。
 3. 要恢复官方文件，双击 `还原官方版.cmd`。
 
@@ -33,11 +33,15 @@
 - 中文交易未出现：确认 AlecaFrame 设置中已启用统计，通过本项目的启动器启动，再完成一笔交易并刷新“统计 → 交易历史”。确认交易弹窗本身不会记账，必须收到游戏的交易成功提示。解析日志在 `%LOCALAPPDATA%\AlecaFrame-ZH-Patch\trade-patch.log`，官方提交结果在 `%LOCALAPPDATA%\Overwolf\Log\Apps\AlecaFrame\BackGround.html.log`。
 
 
-
+## 仍未实现的功能
+- 遗物规划器功能汉化
+- 紫卡功能汉化
+- 遗物推荐功能汉化
+- 紫卡重掷骰评分功能
 
 
 
 
 ## 参考仓库
-界面翻译与部分实现参考项目 [AlecaFrame-ZH-](https://github.com/191086215333/AlecaFrame-ZH-)
-词库参考项目 [wfm-docs](https://github.com/42bytes-team/wfm-docs)
+- 界面翻译与部分实现参考项目 [AlecaFrame-ZH-](https://github.com/191086215333/AlecaFrame-ZH-)
+- 词库参考项目 [wfm-docs](https://github.com/42bytes-team/wfm-docs)
