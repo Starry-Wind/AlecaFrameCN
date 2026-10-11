@@ -96,6 +96,13 @@
             subtree: true
         });
         console.info("[AlecaFrame 中文补丁] 已加载");
+        if (/\/main\.html$/i.test(location.pathname)) {
+            try {
+                if (plugin.get().GetTradeDisplayNamesZH("[]") === "{}") {
+                    console.info("[AlecaFrame 中文交易] 原生解析器已加载");
+                }
+            } catch (error) { console.error("[AlecaFrame 中文交易] 原生解析器未加载", error); }
+        }
     }
 
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);

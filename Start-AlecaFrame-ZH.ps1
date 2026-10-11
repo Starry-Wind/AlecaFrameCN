@@ -1,4 +1,5 @@
-﻿$ErrorActionPreference = "Stop"
+﻿param([switch]$NoErrorDialog)
+$ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "Settings.ps1")
 $config = Get-AlecaFrameZhSettings -PackageRoot $PSScriptRoot
@@ -18,6 +19,8 @@ $localizerSource = Join-Path $PSScriptRoot "alecaframe-zh-cn.js"
 $relicPatchRoot = Join-Path $PSScriptRoot "relic-helper"
 $relicServiceSource = Join-Path $PSScriptRoot "build\AlecaFrameZhRelicServer.exe"
 $relicScriptSource = Join-Path $relicPatchRoot "alecaframe-zh-relic.js"
+$tradePatchRoot = Join-Path $PSScriptRoot "trade-helper"
+$tradeBuildRoot = Join-Path $PSScriptRoot "build\trade"
 $targetPages = @(
     "main.html",
     "AFBuilds.html",
@@ -100,7 +103,8 @@ function Find-OverwolfInstall {
 
 function Get-LatestVersionDirectory {
     $path = Join-Path $extensionsRoot $appVersion
-    if (-not (Test-Path -LiteralPath (Join-Path $path "manifest.json"))) {
+    if (-not (Test-Path -LiteralPath (Join-Path $path "manifest.json")) -or
+        -not (Test-Path -LiteralPath (Join-Path $path "NET\AlecaFrameClientLib.dll"))) {
         $installed = Get-ChildItem -LiteralPath $extensionsRoot -Directory -ErrorAction SilentlyContinue |
             Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName "manifest.json") } |
             Select-Object -ExpandProperty Name
@@ -127,8 +131,24 @@ function Restore-OfficialFiles {
     Assert-AppPath $VersionPath
     $opk = Join-Path $packagesRoot "$Version\app.opk"
     $backupRoot = Join-Path $stateRoot "OfficialBackup\$Version"
-    $entries = @("_metadata/verified_contents.json", "manifest.json", "web/assets/js/relicOverlay/main.js")
+    $entries = @("_metadata/verified_contents.json", "manifest.json", "web/assets/js/relicOverlay/main.js", "web/assets/js/public/stats.js")
     $entries += $targetPages | ForEach-Object { "web/$_" }
+
+    # Older releases did not edit stats.js. Migrate that one backup entry only
+    # when its installed contents still have the untouched official structure.
+    $statsBackup = Join-Path $backupRoot "web\assets\js\public\stats.js"
+    if (-not (Test-Path -LiteralPath $opk) -and
+        (Test-Path -LiteralPath (Join-Path $backupRoot "manifest.json")) -and
+        -not (Test-Path -LiteralPath $statsBackup)) {
+        $statsSource = Join-Path $VersionPath "web\assets\js\public\stats.js"
+        $statsContent = [IO.File]::ReadAllText($statsSource, [Text.Encoding]::UTF8)
+        if ($statsContent.Contains("GetTradeDisplayNamesZH") -or
+            -not $statsContent.Contains("tradeItem.displayName = item.name;")) {
+            throw "旧备份缺少官方统计页面，且当前页面已修改。请在 Overwolf 中重新安装 AlecaFrame。"
+        }
+        New-Item -ItemType Directory -Path (Split-Path -Parent $statsBackup) -Force | Out-Null
+        Copy-Item -LiteralPath $statsSource -Destination $statsBackup -Force
+    }
 
     $backupComplete = $true
     foreach ($entryName in $entries) {
@@ -219,7 +239,7 @@ function Restore-OfficialFiles {
     if (Test-Path -LiteralPath $extraRelicScript) {
         Remove-Item -LiteralPath $extraRelicScript -Force
     }
-    foreach ($extraNative in @("AlecaFrameClientLib.zh.dll", "AlecaFrameZh.RelicHelper.dll", "ZhRelicOcr.ps1")) {
+    foreach ($extraNative in @("AlecaFrameClientLib.zh.dll", "AlecaFrameZh.TradeHelper.dll", "AlecaFrameZh.RelicHelper.dll", "ZhRelicOcr.ps1")) {
         $path = Join-Path $VersionPath "NET\$extraNative"
         if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
     }
@@ -238,7 +258,7 @@ function Stop-OverwolfProcesses {
 }
 
 function Add-ChineseFiles {
-    param([string]$VersionPath)
+    param([string]$VersionPath, [switch]$SkipNativeFiles)
     Assert-AppPath $VersionPath
     $webRoot = Join-Path $VersionPath "web"
     foreach ($relativePage in $targetPages) {
@@ -269,11 +289,29 @@ function Add-ChineseFiles {
     $relicMainJs = Join-Path $webRoot "assets\js\relicOverlay\main.js"
     $mainContent = [IO.File]::ReadAllText($relicMainJs, [Text.Encoding]::UTF8)
     $oldCall = "plugin.get().GetRelicWindowData(sizeTestingMode,"
-    if (-not $mainContent.Contains($oldCall)) {
+    if (-not $mainContent.Contains($oldCall) -and -not $mainContent.Contains("GetRelicWindowDataZH(sizeTestingMode,")) {
         throw "官方遗物页面格式已变化，无法接入中文识别。"
     }
     $mainContent = $mainContent.Replace($oldCall, "GetRelicWindowDataZH(sizeTestingMode,")
     [IO.File]::WriteAllText($relicMainJs, $mainContent, [Text.UTF8Encoding]::new($false))
+
+    & (Join-Path $tradePatchRoot "Patch-TradePage.ps1") -WebRoot $webRoot
+    if (-not $SkipNativeFiles) {
+        Copy-Item -LiteralPath (Join-Path $tradeBuildRoot "AlecaFrameClientLib.dll") `
+            -Destination (Join-Path $VersionPath "NET\AlecaFrameClientLib.zh.dll") -Force
+        Copy-Item -LiteralPath (Join-Path $tradeBuildRoot "AlecaFrameZh.TradeHelper.dll") `
+            -Destination (Join-Path $VersionPath "NET\AlecaFrameZh.TradeHelper.dll") -Force
+    }
+    $manifestPath = Join-Path $VersionPath "manifest.json"
+    $manifestText = [IO.File]::ReadAllText($manifestPath, [Text.Encoding]::UTF8)
+    $manifest = $manifestText | ConvertFrom-Json
+    if ($manifest.data.'extra-objects'.AlecaFrameWrapper.file -ne "NET/AlecaFrameClientLib.dll" -and
+        $manifest.data.'extra-objects'.AlecaFrameWrapper.file -ne "NET/AlecaFrameClientLib.zh.dll") {
+        throw "官方原生插件入口已变化，无法接入中文交易。"
+    }
+    # Keep the official DLL untouched and load the patched copy on renderer reload.
+    $manifestText = $manifestText.Replace('"NET/AlecaFrameClientLib.dll"', '"NET/AlecaFrameClientLib.zh.dll"')
+    [IO.File]::WriteAllText($manifestPath, $manifestText, [Text.UTF8Encoding]::new($false))
 }
 
 function Start-RelicService {
@@ -388,7 +426,12 @@ try {
         throw "缺少汉化词库：$localizerSource"
     }
     foreach ($required in @($relicScriptSource, (Join-Path $PSScriptRoot "Build.ps1"),
-        (Join-Path $PSScriptRoot "Settings.ps1"))) {
+        (Join-Path $PSScriptRoot "Settings.ps1"),
+        (Join-Path $tradePatchRoot "Build-TradePatch.ps1"),
+        (Join-Path $tradePatchRoot "Patch-TradePage.ps1"),
+        (Join-Path $tradePatchRoot "TradeHelper.cs"),
+        (Join-Path $tradePatchRoot "TradePatcher.cs"),
+        (Join-Path $tradePatchRoot "vendor\Mono.Cecil.dll"))) {
         if (-not (Test-Path -LiteralPath $required)) {
             throw "缺少中文遗物识别文件：$required"
         }
@@ -420,6 +463,8 @@ try {
     $didModifySession = $true
     Stop-OverwolfProcesses
     Restore-OfficialFiles -Version $versionDirectory.Name -VersionPath $versionDirectory.FullName
+    & (Join-Path $tradePatchRoot "Build-TradePatch.ps1") `
+        -OfficialNetRoot (Join-Path $versionDirectory.FullName "NET") -OutputRoot $tradeBuildRoot
     Start-RelicService
 
     $overwolfStartedAt = Get-Date
@@ -433,20 +478,30 @@ try {
     Wait-OverwolfExtensionReady -StartedAt $overwolfStartedAt
     Start-Sleep -Seconds 4
 
+    if (-not (Test-Path -LiteralPath (Join-Path $versionDirectory.FullName "NET\AlecaFrameClientLib.dll"))) {
+        throw "AlecaFrame 在启动时自动更新了版本，请重新运行中文版启动器以检测新版。"
+    }
     Add-ChineseFiles -VersionPath $versionDirectory.FullName
+
+    # Overwolf caches the extra-object DLL path in its main process. Restart it
+    # after changing the manifest so the patched native plugin is really loaded.
+    Stop-OverwolfProcesses
+    $patchedStartedAt = Get-Date
+    Start-Process -FilePath $overwolfExe `
+        -ArgumentList "--ow-enable-features=force-validation-report-only", "--ow-disable-features=extension-validation,read-opk-from-memory"
+    Wait-OverwolfPatchedSessionReady -StartedAt $patchedStartedAt
+    $null = Start-AlecaFrameAndWait -TimeoutSeconds 120
+    Wait-OverwolfExtensionReady -StartedAt $patchedStartedAt
+    Start-Sleep -Seconds 4
+
+    # Recovery can restore official web assets after caching the new native
+    # entry. Reapply the page patch after recovery and keep the loaded DLLs.
+    Add-ChineseFiles -VersionPath $versionDirectory.FullName -SkipNativeFiles
     $patchTime = Get-Date
-
-    # Reload only AlecaFrame's renderer so the rest of Overwolf remains running.
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-        Where-Object {
-            $_.Name -eq "OverwolfBrowser.exe" -and
-            $_.CommandLine -match [regex]::Escape("--uid=$appId")
-        } |
-        ForEach-Object {
-            Stop-Process -Id $_.ProcessId -ErrorAction SilentlyContinue
-        }
+        Where-Object { $_.Name -eq "OverwolfBrowser.exe" -and $_.CommandLine -match [regex]::Escape("--uid=$appId") } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -ErrorAction SilentlyContinue }
     Start-Sleep -Seconds 3
-
     $null = Start-AlecaFrameAndWait -TimeoutSeconds 120
 
     $loaded = $false
@@ -457,7 +512,8 @@ try {
             $logItem = Get-Item -LiteralPath $mainLog
             if ($logItem.LastWriteTime -ge $patchTime.AddSeconds(-2)) {
                 $tail = Get-Content -LiteralPath $mainLog -Tail 40 -ErrorAction SilentlyContinue
-                if ($tail -match "\[AlecaFrame 中文补丁\] 已加载") {
+                if (($tail -match "\[AlecaFrame 中文补丁\] 已加载") -and
+                    ($tail -match "\[AlecaFrame 中文交易\] 原生解析器已加载")) {
                     $loaded = $true
                     break
                 }
@@ -465,7 +521,28 @@ try {
         }
     }
     if (-not $loaded) {
-        throw "中文脚本未能加载，请查看 $stateRoot\launcher.log"
+        throw "中文界面或交易解析器未能加载，请查看 $stateRoot\launcher.log 和 MainWindow.html.log"
+    }
+
+    # A renderer launch can finish a delayed OPK recovery after the earlier
+    # reapplication. The running native entry is now confirmed, so keep that
+    # instance and repair recovered files without replacing its loaded DLLs.
+    $stableChecks = 0
+    for ($attempt = 0; $attempt -lt 12; $attempt++) {
+        $currentManifest = Get-Content -LiteralPath (Join-Path $versionDirectory.FullName "manifest.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+        $statsPatched = [IO.File]::ReadAllText((Join-Path $versionDirectory.FullName "web\assets\js\public\stats.js")).Contains("GetTradeDisplayNamesZH")
+        if ($currentManifest.data.'extra-objects'.AlecaFrameWrapper.file -ne "NET/AlecaFrameClientLib.zh.dll" -or -not $statsPatched) {
+            Add-ChineseFiles -VersionPath $versionDirectory.FullName -SkipNativeFiles
+            Write-LauncherLog "Reapplied Chinese files after delayed Overwolf recovery"
+            $stableChecks = 0
+        } else {
+            $stableChecks++
+            if ($stableChecks -ge 3) { break }
+        }
+        Start-Sleep -Seconds 1
+    }
+    if ($stableChecks -lt 3) {
+        throw "Overwolf 持续还原中文插件文件，中文补丁未能稳定加载。"
     }
 
     $installedRelicJs = Join-Path $versionDirectory.FullName "web\assets\js\relicOverlay\main.js"
@@ -473,14 +550,19 @@ try {
         throw "中文遗物页面补丁未能保留。"
     }
 
-    Write-LauncherLog "Chinese UI loaded; relic fallback ready for in-game validation"
+    $installedManifest = Get-Content -LiteralPath (Join-Path $versionDirectory.FullName "manifest.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($installedManifest.data.'extra-objects'.AlecaFrameWrapper.file -ne "NET/AlecaFrameClientLib.zh.dll") {
+        throw "中文交易插件入口未能保留。"
+    }
+
+    Write-LauncherLog "Chinese UI loaded; relic fallback and Chinese trade parser ready for in-game validation"
 }
 catch {
     Write-LauncherLog "ERROR: $($_.Exception.Message)"
     if ($didModifySession) {
         try {
             Stop-OverwolfProcesses
-            if ($versionDirectory) {
+            if ($versionDirectory -and (Test-Path -LiteralPath (Join-Path $versionDirectory.FullName "NET\AlecaFrameClientLib.dll"))) {
                 Restore-OfficialFiles -Version $versionDirectory.Name -VersionPath $versionDirectory.FullName
             }
         }
@@ -488,12 +570,16 @@ catch {
             Write-LauncherLog "RESTORE ERROR: $($_.Exception.Message)"
         }
     }
-    Add-Type -AssemblyName System.Windows.Forms
-    [Windows.Forms.MessageBox]::Show(
-        $_.Exception.Message,
-        "AlecaFrame 中文启动失败",
-        [Windows.Forms.MessageBoxButtons]::OK,
-        [Windows.Forms.MessageBoxIcon]::Error
-    ) | Out-Null
+    if ($NoErrorDialog) {
+        Write-Host $_.Exception.Message -ForegroundColor Red
+    } else {
+        Add-Type -AssemblyName System.Windows.Forms
+        [Windows.Forms.MessageBox]::Show(
+            $_.Exception.Message,
+            "AlecaFrame 中文启动失败",
+            [Windows.Forms.MessageBoxButtons]::OK,
+            [Windows.Forms.MessageBoxIcon]::Error
+        ) | Out-Null
+    }
     exit 1
 }

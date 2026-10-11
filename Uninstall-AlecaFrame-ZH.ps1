@@ -45,8 +45,16 @@ if ($versionDirectory) {
 
     $opk = Join-Path $packagesRoot "$($versionDirectory.Name)\app.opk"
     $backupRoot = Join-Path $stateRoot "OfficialBackup\$($versionDirectory.Name)"
-    $entries = @("_metadata/verified_contents.json", "manifest.json", "web/assets/js/relicOverlay/main.js")
+    $entries = @("_metadata/verified_contents.json", "manifest.json", "web/assets/js/relicOverlay/main.js", "web/assets/js/public/stats.js")
     $entries += $targetPages | ForEach-Object { "web/$_" }
+    # A pre-trade-patch backup lacks stats.js; leave its untouched installed
+    # version in place when rolling back such an older installation.
+    $statsBackup = Join-Path $backupRoot "web\assets\js\public\stats.js"
+    $statsInstalled = Join-Path $versionDirectory.FullName "web\assets\js\public\stats.js"
+    if (-not (Test-Path -LiteralPath $statsBackup) -and
+        -not ([IO.File]::ReadAllText($statsInstalled).Contains("GetTradeDisplayNamesZH"))) {
+        $entries = @($entries | Where-Object { $_ -ne "web/assets/js/public/stats.js" })
+    }
     $backupComplete = $true
     foreach ($entryName in $entries) {
         $backup = Join-Path $backupRoot ($entryName.Replace("/", "\"))
@@ -101,7 +109,7 @@ if ($versionDirectory) {
     if (Test-Path -LiteralPath $extraRelic) {
         Remove-Item -LiteralPath $extraRelic -Force
     }
-    foreach ($extraNative in @("AlecaFrameClientLib.zh.dll", "AlecaFrameZh.RelicHelper.dll", "ZhRelicOcr.ps1")) {
+    foreach ($extraNative in @("AlecaFrameClientLib.zh.dll", "AlecaFrameZh.TradeHelper.dll", "AlecaFrameZh.RelicHelper.dll", "ZhRelicOcr.ps1")) {
         $path = Join-Path $versionDirectory.FullName "NET\$extraNative"
         if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
     }
