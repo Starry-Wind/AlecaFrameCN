@@ -19,7 +19,7 @@ function GetRelicWindowDataZH(testMode, callback) {
         };
 
         readLocalResult(startTime - 5000)
-            .then(async response => {
+            .then(response => {
                 if (!response.ok || !Array.isArray(response.rewards) || !response.rewards.length) {
                     throw new Error(response.error || "中文遗物截图识别失败");
                 }
@@ -43,8 +43,8 @@ function GetRelicWindowDataZH(testMode, callback) {
                 const refresh = () => {
                     if (window.relicsApp) relicsApp.relics = rewards.slice();
                 };
-                fillPrices(native, response.rewards, rewards).then(refresh);
-                fillInventory(native, rewards).then(refresh);
+                fillPrices(native, response.rewards, rewards, refresh);
+                fillFoundry(native, response.rewards, rewards, refresh);
             })
             .catch(error => {
                 console.error("[AlecaFrame 中文遗物] " + error);
@@ -86,60 +86,88 @@ function readLocalResult(minimumSourceTime) {
     });
 }
 
-function fillPrices(native, source, rewards) {
-    return new Promise(resolve => {
-        const timer = setTimeout(resolve, 3000);
-        try {
-            const names = source.map(item => item.englishName);
-            native.getHugePriceList(JSON.stringify(names), (success, data) => {
-                clearTimeout(timer);
-                try {
-                    if (success) {
-                        const prices = JSON.parse(data);
-                        rewards.forEach((reward, i) => {
-                            const part = prices[i];
-                            if (part && Number(part.post) > 0) reward.platinum = Number(part.post);
-                        });
+function fillPrices(native, source, rewards, refresh) {
+    try {
+        // Older market entries use " Set"; some newer entries use the parent
+        // name directly. Keep both queries in English, independent of display names.
+        const parents = source.map(item =>
+            /\bPrime\b/.test(item.parentName || "") ? item.parentName : "");
+        const names = Array.from(new Set(source.map(item => item.englishName)
+            .concat(parents.filter(Boolean).flatMap(name => [name + " Set", name]))));
+        native.getHugePriceList(JSON.stringify(names), (success, data) => {
+            try {
+                if (!success) return;
+                const prices = JSON.parse(data);
+                const byName = new Map(names.map((name, i) => [name, prices[i]]));
+                const priceFor = name => {
+                    const item = byName.get(name);
+                    return item && Number(item.post) > 0 ? Number(item.post) : -1;
+                };
+                rewards.forEach((reward, i) => {
+                    reward.platinum = priceFor(source[i].englishName);
+                    if (parents[i]) {
+                        const setPrice = priceFor(parents[i] + " Set");
+                        reward.setPlat = setPrice > 0 ? setPrice : priceFor(parents[i]);
                     }
-                } catch (error) { console.warn("[AlecaFrame 中文遗物] 价格读取失败", error); }
-                resolve();
-            });
-        } catch (error) { clearTimeout(timer); resolve(); }
-    });
+                });
+                // A native price request can finish after the old three-second
+                // timeout. Refresh on the actual callback so Vue sees late data.
+                refresh();
+            } catch (error) { console.warn("[AlecaFrame 中文遗物] 价格读取失败", error); }
+        });
+    } catch (error) { console.warn("[AlecaFrame 中文遗物] 价格读取失败", error); }
 }
 
-function fillInventory(native, rewards) {
-    return new Promise(resolve => {
-        const timer = setTimeout(resolve, 3000);
-        const filter = {
-            type: "allParts", search: "", order: "name",
-            orderLargerToSmaller: false, yesnoFilters: "{}", onlyOwned: false
-        };
-        try {
-            native.getFilteredInventory(JSON.stringify(filter), true, (success, data) => {
-                clearTimeout(timer);
-                try {
-                    if (success) {
-                        const items = JSON.parse(data);
-                        const byPart = new Map();
-                        items.forEach(item => {
-                            (item.components || []).forEach(component => {
-                                const key = component.baseData && component.baseData.uniqueName;
-                                if (key) byPart.set(key, { item, component });
-                            });
-                        });
-                        rewards.forEach(reward => {
-                            const match = byPart.get(reward.internalName);
-                            if (!match) return;
-                            reward.countOwned = Number(match.component.baseData.quantityOwned) || 0;
-                            reward.isFav = !!(match.component.baseData.isFav ||
-                                match.component.isFav || match.item.isFav);
-                            reward.isPartOfOwned = !!match.item.owned;
-                        });
+function fillFoundry(native, source, rewards, refresh) {
+    const filter = {
+        type: "all", search: "", order: "name",
+        orderLargerToSmaller: false, yesnoFilters: "{}"
+    };
+    try {
+        // Inventory entries are flat. Foundry entries contain the native recipe,
+        // component pictures, quantities, favourites and ownership/mastery flags.
+        native.getFilteredFoundry(JSON.stringify(filter), true, (success, data) => {
+            try {
+                if (!success) return;
+                const items = JSON.parse(data);
+                const byPart = new Map();
+                items.forEach(item => {
+                    (item.components || []).forEach(component => {
+                        const key = component.uniqueName;
+                        if (!key) return;
+                        if (!byPart.has(key)) byPart.set(key, []);
+                        byPart.get(key).push({ item, component });
+                    });
+                });
+                rewards.forEach((reward, i) => {
+                    const matches = byPart.get(reward.internalName);
+                    if (!matches) return;
+                    // A component can be used by several recipes. Use the parent
+                    // selected by recognition instead of the last indexed recipe.
+                    const parent = source[i];
+                    const match = matches.find(entry => entry.item.internalName === parent.parentInternalName) ||
+                        matches.find(entry => entry.item.name === parent.parentName) || matches[0];
+                    const item = match.item;
+                    const component = match.component;
+                    reward.countOwned = Number(component.quantityOwned) || 0;
+                    reward.totalToOwn = Number(component.neccessaryAmount) || reward.totalToOwn;
+                    reward.isFav = !!(component.isFav || component.isFavOnlyPart || item.isFav);
+                    reward.isPartOfOwned = !!(item.owned || item.mastered || item.pendingInFoundry || component.parentOwned);
+                    // Match the official overlay: only Prime recipes, without
+                    // resource/research ingredients, and highlight this reward.
+                    if (/\bPrime\b/.test(reward.englishName + " " + (parent.parentName || item.name))) {
+                        reward.componentData = item.components
+                            .filter(part => part.uniqueName &&
+                                !part.uniqueName.includes("/MiscItems/") &&
+                                !part.uniqueName.includes("/Research/"))
+                            .map(part => Object.assign({}, part, {
+                                recipeHighlightedComponent: part.uniqueName === reward.internalName
+                            }));
                     }
-                } catch (error) { console.warn("[AlecaFrame 中文遗物] 库存读取失败", error); }
-                resolve();
-            });
-        } catch (error) { clearTimeout(timer); resolve(); }
-    });
+                });
+                refresh();
+                console.log("[AlecaFrame 中文遗物] 已补全奖励的铸造部件及持有数量");
+            } catch (error) { console.warn("[AlecaFrame 中文遗物] 铸造数据读取失败", error); }
+        });
+    } catch (error) { console.warn("[AlecaFrame 中文遗物] 铸造数据读取失败", error); }
 }

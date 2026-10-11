@@ -32,6 +32,7 @@ internal static class RelicServer
         public string name;
         public string internalName;
         public string parentName;
+        public string parentInternalName;
         public int ducats;
         public int totalToOwn;
         public bool isItemVaulted;
@@ -477,6 +478,7 @@ internal static class RelicServer
                 String.IsNullOrEmpty(baseZh) ? english : baseZh + " " + suffix),
             internalName = partKey,
             parentName = parent == null ? null : (string)parent["name"],
+            parentInternalName = parentKey,
             ducats = part["ducats"] == null ? -1 : (int)part["ducats"],
             totalToOwn = count,
             isItemVaulted = parent != null && parent["vaulted"] != null && (bool)parent["vaulted"]
