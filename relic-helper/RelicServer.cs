@@ -473,7 +473,8 @@ internal static class RelicServer
         return new Reward
         {
             englishName = (string)part.SelectToken("drops[0].type") ?? english,
-            name = String.IsNullOrEmpty(baseZh) ? english : baseZh + " " + suffix,
+            name = RelicHelper.GetDisplayName((string)part.SelectToken("drops[0].type") ?? english,
+                String.IsNullOrEmpty(baseZh) ? english : baseZh + " " + suffix),
             internalName = partKey,
             parentName = parent == null ? null : (string)parent["name"],
             ducats = part["ducats"] == null ? -1 : (int)part["ducats"],

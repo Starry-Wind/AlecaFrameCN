@@ -16,6 +16,8 @@ $packagesRoot = if ($config.packagesRoot) { [string]$config.packagesRoot } else 
 }
 $stateRoot = Join-Path $env:LOCALAPPDATA "AlecaFrame-ZH-Patch"
 $localizerSource = Join-Path $PSScriptRoot "alecaframe-zh-cn.js"
+$itemNamesRoot = Join-Path $PSScriptRoot "item-names"
+$itemNamesSource = Join-Path $itemNamesRoot "item-names.json"
 $relicPatchRoot = Join-Path $PSScriptRoot "relic-helper"
 $relicServiceSource = Join-Path $PSScriptRoot "build\AlecaFrameZhRelicServer.exe"
 $relicScriptSource = Join-Path $relicPatchRoot "alecaframe-zh-relic.js"
@@ -41,6 +43,28 @@ function Write-LauncherLog {
     New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null
     $line = "$(Get-Date -Format o) $Message"
     Add-Content -LiteralPath (Join-Path $stateRoot "launcher.log") -Value $line -Encoding UTF8
+}
+
+function Update-ItemNamesForGameVersion {
+    $source = Join-Path $itemNamesRoot "ItemNamesUpdater.cs"
+    $output = Join-Path $PSScriptRoot "build\item-names-updater"
+    $program = Join-Path $output "AlecaFrameZh.ItemNamesUpdater.exe"
+    $runtimeLibrary = Join-Path $output "Newtonsoft.Json.dll"
+    $compiler = Join-Path $env:WINDIR "Microsoft.NET\Framework\v4.0.30319\csc.exe"
+    New-Item -ItemType Directory -Path $output -Force | Out-Null
+    $libraryChanged = -not (Test-Path -LiteralPath $runtimeLibrary) -or
+        (Get-FileHash -LiteralPath $officialJsonLibrary).Hash -ne (Get-FileHash -LiteralPath $runtimeLibrary).Hash
+    if ($libraryChanged) { Copy-Item -LiteralPath $officialJsonLibrary -Destination $runtimeLibrary -Force }
+    if ($libraryChanged -or -not (Test-Path -LiteralPath $program) -or
+        (Get-Item -LiteralPath $program).LastWriteTimeUtc -lt (Get-Item -LiteralPath $source).LastWriteTimeUtc) {
+        & $compiler /nologo /target:exe /optimize+ "/out:$program" "/reference:$runtimeLibrary" $source
+        if ($LASTEXITCODE -ne 0) { throw "物品词库更新程序构建失败。" }
+    }
+    & $program $PSScriptRoot $gameDataRoot (Join-Path $env:LOCALAPPDATA "Warframe") | ForEach-Object {
+        Write-Host $_
+        Write-LauncherLog "Item-name update: $_"
+    }
+    if ($LASTEXITCODE -ne 0) { throw "物品词库更新程序无法读取现有词库。" }
 }
 
 function Find-OverwolfInstall {
@@ -239,7 +263,9 @@ function Restore-OfficialFiles {
     if (Test-Path -LiteralPath $extraRelicScript) {
         Remove-Item -LiteralPath $extraRelicScript -Force
     }
-    foreach ($extraNative in @("AlecaFrameClientLib.zh.dll", "AlecaFrameZh.TradeHelper.dll", "AlecaFrameZh.RelicHelper.dll", "ZhRelicOcr.ps1")) {
+    $extraItemNames = Join-Path $VersionPath "web\assets\js\item-names.json"
+    if (Test-Path -LiteralPath $extraItemNames) { Remove-Item -LiteralPath $extraItemNames -Force }
+    foreach ($extraNative in @("AlecaFrameClientLib.zh.dll", "AlecaFrameZh.TradeHelper.dll", "AlecaFrameZh.RelicHelper.dll", "ZhRelicOcr.ps1", "item-names.json")) {
         $path = Join-Path $VersionPath "NET\$extraNative"
         if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
     }
@@ -283,6 +309,8 @@ function Add-ChineseFiles {
     Copy-Item -LiteralPath $localizerSource `
         -Destination (Join-Path $webRoot "assets\js\alecaframe-zh-cn.js") `
         -Force
+    Copy-Item -LiteralPath $itemNamesSource -Destination (Join-Path $webRoot "assets\js\item-names.json") -Force
+    Copy-Item -LiteralPath $itemNamesSource -Destination (Join-Path $VersionPath "NET\item-names.json") -Force
     Copy-Item -LiteralPath $relicScriptSource `
         -Destination (Join-Path $webRoot "assets\js\alecaframe-zh-relic.js") `
         -Force
@@ -425,7 +453,7 @@ try {
     if (-not (Test-Path -LiteralPath $localizerSource)) {
         throw "缺少汉化词库：$localizerSource"
     }
-    foreach ($required in @($relicScriptSource, (Join-Path $PSScriptRoot "Build.ps1"),
+    foreach ($required in @($relicScriptSource, $itemNamesSource, (Join-Path $itemNamesRoot "ItemNames.cs"), (Join-Path $itemNamesRoot "ItemNamesUpdater.cs"), (Join-Path $PSScriptRoot "Build.ps1"),
         (Join-Path $PSScriptRoot "Settings.ps1"),
         (Join-Path $tradePatchRoot "Build-TradePatch.ps1"),
         (Join-Path $tradePatchRoot "Patch-TradePage.ps1"),
@@ -459,6 +487,12 @@ try {
         throw "AlecaFrame 官方文件不完整：NET\Newtonsoft.Json.dll。请在 Overwolf 中重新安装 AlecaFrame。"
     }
     Write-LauncherLog "Starting AlecaFrame ZH for $($versionDirectory.Name)"
+
+    try {
+        Update-ItemNamesForGameVersion
+    } catch {
+        Write-LauncherLog "Item-name update unavailable; keeping bundled dictionary: $($_.Exception.Message)"
+    }
 
     $didModifySession = $true
     Stop-OverwolfProcesses
@@ -513,7 +547,8 @@ try {
             if ($logItem.LastWriteTime -ge $patchTime.AddSeconds(-2)) {
                 $tail = Get-Content -LiteralPath $mainLog -Tail 40 -ErrorAction SilentlyContinue
                 if (($tail -match "\[AlecaFrame 中文补丁\] 已加载") -and
-                    ($tail -match "\[AlecaFrame 中文交易\] 原生解析器已加载")) {
+                    ($tail -match "\[AlecaFrame 中文交易\] 原生解析器已加载") -and
+                    ($tail -match "\[AlecaFrame 中文物品\] 已加载")) {
                     $loaded = $true
                     break
                 }

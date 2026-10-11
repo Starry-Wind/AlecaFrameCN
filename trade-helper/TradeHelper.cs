@@ -293,7 +293,7 @@ namespace AlecaFrameZh
                     if (String.IsNullOrWhiteSpace(en)) continue;
                     string zh = LocalName(languages, id, "zh");
                     string tc = LocalName(languages, id, "tc");
-                    var item = new Item { id = id, english = en, chinese = zh, category = categories[id] };
+                    var item = new Item { id = id, english = en, chinese = ItemNames.Chinese(en, zh ?? en), category = categories[id] };
                     JArray parentIds = record["parentUniqueNames"] as JArray;
                     if (item.category == "Components" && parentIds != null)
                     {
@@ -312,7 +312,8 @@ namespace AlecaFrameZh
                             if (nextItems.ContainsKey(id) == false)
                             {
                                 item.english = fullEn;
-                                item.chinese = fullZh;
+                                string dropEnglish = (string)record.SelectToken("drops[0].type") ?? fullEn;
+                                item.chinese = ItemNames.Chinese(dropEnglish, ItemNames.Chinese(fullEn, fullZh));
                             }
                             AddAlias(fullEn, item, nextAliases);
                             AddAlias(fullEn + " Blueprint", item, nextAliases);
@@ -320,6 +321,7 @@ namespace AlecaFrameZh
                             AddAlias(fullZh + " 蓝图", item, nextAliases);
                             AddAlias(fullTc, item, nextAliases);
                             AddAlias(fullTc + " 藍圖", item, nextAliases);
+                            AddAlias(item.chinese, item, nextAliases);
                             nextItems[id] = item;
                         }
                     }
@@ -328,6 +330,7 @@ namespace AlecaFrameZh
                         AddAlias(en, item, nextAliases);
                         AddAlias(zh, item, nextAliases);
                         AddAlias(tc, item, nextAliases);
+                        AddAlias(item.chinese, item, nextAliases);
                         if (new [] { "Warframes", "Primary", "Secondary", "Melee", "Archwing", "Arch-Gun", "Arch-Melee" }.Contains(item.category))
                         {
                             AddAlias(en + " Blueprint", item, nextAliases);

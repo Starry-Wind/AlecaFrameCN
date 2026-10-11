@@ -16,14 +16,16 @@ if (-not (Test-Path -LiteralPath $compiler)) { throw "找不到 .NET Framework C
 
 $output = Join-Path $PSScriptRoot "build"
 $sources = Join-Path $PSScriptRoot "relic-helper"
+$itemNamesRoot = Join-Path $PSScriptRoot "item-names"
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 Copy-Item -LiteralPath $newtonsoft -Destination (Join-Path $output "Newtonsoft.Json.dll") -Force
 Copy-Item -LiteralPath (Join-Path $sources "ZhRelicOcr.ps1") -Destination (Join-Path $output "ZhRelicOcr.ps1") -Force
+Copy-Item -LiteralPath (Join-Path $itemNamesRoot "item-names.json") -Destination (Join-Path $output "item-names.json") -Force
 $jsonReference = "/reference:$(Join-Path $output 'Newtonsoft.Json.dll')"
 $helper = Join-Path $output "AlecaFrameZh.RelicHelper.dll"
 $server = Join-Path $output "AlecaFrameZhRelicServer.exe"
 & $compiler /nologo /target:library /optimize+ "/out:$helper" `
-    /reference:System.Drawing.dll $jsonReference (Join-Path $sources "RelicHelper.cs")
+    /reference:System.Drawing.dll $jsonReference (Join-Path $sources "RelicHelper.cs") (Join-Path $itemNamesRoot "ItemNames.cs")
 if ($LASTEXITCODE -ne 0) { throw "RelicHelper 编译失败。" }
 & $compiler /nologo /target:exe /optimize+ "/out:$server" `
     /reference:System.Drawing.dll /reference:System.IO.Compression.dll `

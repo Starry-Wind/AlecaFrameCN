@@ -8,34 +8,247 @@
     var attrNames = ["title", "placeholder", "aria-label", "data-tippy-content", "alt"];
     var pending = new Set();
     var scheduled = false;
+    var itemNames = Object.create(null);
+    var itemAliases = Object.create(null);
+    var marketNames = new WeakMap();
+    var sourceTexts = new WeakMap();
+    var sourceAttributes = new WeakMap();
+    var marketNameSelector = ".wfmItemName, .wfmRightItemName";
+    var relicEras = { lith: "古纪", meso: "前纪", neo: "中纪", axi: "后纪", requiem: "安魂", vanguard: "先锋", void: "虚空" };
+    var relicTiers = { intact: "完整", exceptional: "优良", flawless: "无瑕", radiant: "光辉", int: "完整", exc: "优良", fla: "无瑕", rad: "光辉" };
+    Object.assign(translations, {
+        "Loading relics...": "正在加载遗物……",
+        "Push your current filters to the overlay.": "将当前筛选条件应用到遗物推荐叠加层。",
+        "The current filters will now be used in the overlay": "当前筛选条件已应用到遗物推荐叠加层",
+        "Expected profits for the selected squad size.": "当前队伍人数下的预期收益。",
+        "Expected (average) returns of this relic": "此遗物的预期平均收益",
+        "Probability of getting AT LEAST 1 copy of this reward": "至少获得一件此奖励的概率",
+        "Vault status": "入库状态",
+        "WFMarket order placed": "已在 WFMarket 发布订单",
+        "Common": "常见", "Uncommon": "罕见", "Rare": "稀有"
+    });
 
-    function lookup(raw) {
+    function itemKey(value) {
+        return value.trim().replace(/\s+/g, " ").toLowerCase();
+    }
+
+    function itemPair(value) {
+        var key = itemKey(value);
+        var pair = itemNames[key] || itemNames[itemAliases[key]] || null;
+        return relicPair(pair ? pair.en : value.trim()) || pair;
+    }
+
+    // The planner uses names without "Relic" and combines refinement tiers
+    // into separate labels. Only the display changes; English source data stays
+    // available to market searches, favourites, filters and detail selectors.
+    function relicPair(english) {
+        var match = english.match(/^(Lith|Meso|Neo|Axi|Requiem|Vanguard|Void)(?:\s+([A-Z]\d+|[IVX]+|Eterna))?(?:\s+(Relic))?(?:\s+(Intact|Exceptional|Flawless|Radiant)|\s+\((Intact|Exceptional|Flawless|Radiant)\))?$/i);
+        if (!match || (!match[2] && !match[3])) return null;
+        var era = match[1].toLowerCase();
+        var code = match[2] ? match[2].toUpperCase() : "";
+        if (code === "ETERNA") code = "Eterna";
+        var baseEnglish = match[1] + (code ? " " + code : "") + " Relic";
+        var base = itemNames[itemKey(baseEnglish)];
+        var chineseCode = code === "Eterna" ? "永恒" : code;
+        var chinese = base && base.zh !== base.en ? base.zh : relicEras[era] + (chineseCode ? " " + chineseCode + " " : "") + "遗物";
+        var tier = match[4] || match[5];
+        if (tier) chinese += "（" + relicTiers[tier.toLowerCase()] + "）";
+        return { en: english, zh: chinese };
+    }
+
+    function setAttribute(element, name, value) {
+        if (element.getAttribute(name) !== value) element.setAttribute(name, value);
+    }
+
+    // Change display text only. Vue's English item names, market IDs and
+    // ordering/editing actions keep using the official data model.
+    function refreshMarketName(element) {
+        var previous = marketNames.get(element);
+        var rows = [];
+        var signature = [];
+        var walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null, false);
+        var node;
+        while ((node = walker.nextNode())) {
+            var raw = node.nodeValue;
+            if (!raw.trim()) continue;
+            var oldRow = previous && previous.rows.find(function (row) {
+                return row.node === node && (itemKey(raw) === itemKey(row.en) || itemKey(raw) === itemKey(row.zh));
+            });
+            var pair = oldRow || itemPair(raw);
+            signature.push(pair ? pair.en : raw.trim());
+            if (!pair) continue;
+            var lead = /^\s*/.exec(raw)[0];
+            var tail = /\s*$/.exec(raw)[0];
+            if (pair.en === pair.zh) {
+                var englishOnly = lead + pair.en + tail;
+                if (node.nodeValue !== englishOnly) node.nodeValue = englishOnly;
+                continue;
+            }
+            rows.push({ node: node, en: pair.en, zh: pair.zh, lead: lead, tail: tail });
+        }
+        if (!rows.length) {
+            if (previous) {
+                marketNames.delete(element);
+                ["data-zh-toggle", "role", "tabindex", "aria-pressed", "aria-label", "title"].forEach(function (name) { element.removeAttribute(name); });
+            }
+            return null;
+        }
+        var identity = signature.join("\u0000");
+        var same = previous && previous.identity === identity && previous.rows.length === rows.length &&
+            previous.rows.every(function (row, i) { return row.node === rows[i].node; });
+        var state = { rows: rows, identity: identity, chinese: !!(same && previous.chinese) };
+        marketNames.set(element, state);
+        rows.forEach(function (row) {
+            var display = row.lead + (state.chinese ? row.zh : row.en) + row.tail;
+            if (row.node.nodeValue !== display) row.node.nodeValue = display;
+        });
+        setAttribute(element, "data-zh-toggle", "true");
+        setAttribute(element, "role", "button");
+        setAttribute(element, "tabindex", "0");
+        setAttribute(element, "aria-pressed", String(state.chinese));
+        setAttribute(element, "title", state.chinese ? "点击切换为英文名称" : "点击切换为中文名称");
+        setAttribute(element, "aria-label", element.textContent.trim() + "，" + (state.chinese ? "切换为英文名称" : "切换为中文名称"));
+        return state;
+    }
+
+    function toggleMarketName(event) {
+        if (event.type === "keydown" && event.key !== "Enter" && event.key !== " ") return;
+        if (event.type === "keydown" && event.repeat) return;
+        var target = event.target.nodeType === Node.ELEMENT_NODE ? event.target : event.target.parentElement;
+        var element = target && target.closest(marketNameSelector);
+        if (!element) return;
+        var state = refreshMarketName(element);
+        if (!state) return;
+        event.preventDefault();
+        event.stopPropagation();
+        state.chinese = !state.chinese;
+        refreshMarketName(element);
+    }
+
+    function loadItemNames() {
+        fetch(new URL("assets/js/item-names.json", document.baseURI)).then(function (response) {
+            if (!response.ok) throw new Error("物品对照表读取失败：" + response.status);
+            return response.json();
+        }).then(function (data) {
+            if (!data.items || !Array.isArray(data.warframes)) throw new Error("物品对照表格式不正确");
+            Object.keys(data.items).forEach(function (english) {
+                itemNames[itemKey(english)] = { en: english, zh: data.items[english] };
+            });
+            data.warframes.forEach(function (english) {
+                itemNames[itemKey(english)] = { en: english, zh: english };
+            });
+            Object.keys(data.aliases || {}).forEach(function (alias) {
+                itemAliases[itemKey(alias)] = itemKey(data.aliases[alias]);
+            });
+            walk(document.body);
+            console.info("[AlecaFrame 中文物品] 已加载 " + data.sourceRows + " 条对照及官方补充词库；市场名称支持点击切换");
+            console.info("[AlecaFrame 中文遗物] 遗物名称、精炼等级与规划提示已加载");
+        }).catch(function (error) { console.error("[AlecaFrame 中文物品]", error); });
+    }
+
+    function lookup(raw, element) {
         var key = raw.trim().replace(/\s+/g, " ");
         if (!key || key.indexOf("{{") !== -1) return null;
+        if (element && element.closest(".topSetting.relicPlanner, #tooltipFiltersRelicPlannerTemplate")) {
+            var era = relicEras[key.toLowerCase()];
+            if (era) return era;
+        }
+        if (element && element.closest(".relicDetailsSelector, #tooltipFiltersRelicPlannerTemplate, .relicPlannerRarityHolder")) {
+            var refinement = relicTiers[key.toLowerCase().replace(/\.$/, "")];
+            if (refinement) return refinement;
+        }
+        var pair = itemPair(key);
+        if (pair) return pair.zh;
         if (Object.prototype.hasOwnProperty.call(translations, key)) return translations[key];
+        var tier = key.match(/^(\d+)\s*[x×]\s*(Intact|Exceptional|Flawless|Radiant|Int\.|Exc\.|Fla\.|Rad\.)\s*(:)?$/i);
+        if (tier) return tier[1] + "× " + relicTiers[tier[2].toLowerCase().replace(/\.$/, "")] + (tier[3] ? "：" : "");
+        var progress = key.match(/^Downloading item prices \((\d+)\/(\d+)\)\.\.\.$/);
+        if (progress) return "正在下载物品价格（" + progress[1] + "/" + progress[2] + "）……";
+        progress = key.match(/^Loading relic (\d+)\/(\d+)\.\.\.$/);
+        if (progress) return "正在加载遗物（" + progress[1] + "/" + progress[2] + "）……";
         var match = key.match(/^(\d+) new items found$/);
         if (match) return "发现 " + match[1] + " 件新物品";
         return null;
     }
 
+    function sourceText(node) {
+        var saved = sourceTexts.get(node);
+        return saved && node.nodeValue === saved.display ? saved.original : node.nodeValue;
+    }
+
+    function inventoryEnglishName(element) {
+        var parts = [];
+        var walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null, false);
+        var node;
+        while ((node = walker.nextNode())) parts.push(sourceText(node));
+        return parts.join("").trim();
+    }
+
+    // The official inventory handler reads innerText, which is now Chinese.
+    // Retain the exact source name instead of guessing it from a Chinese alias.
+    // All inventory/changes-view sell buttons delegate to this same handler.
+    function installInventoryMarketBridge() {
+        var official = window.onBuySellItemClicked;
+        if (typeof official !== "function") return;
+        window.onBuySellItemClicked = function (event, isWTB) {
+            var target = event.target;
+            if (target && target.nodeType !== Node.ELEMENT_NODE) target = target.parentElement;
+            var item = target && target.closest(".inventoryObject");
+            var name = item && item.querySelector(".inventoryItemName");
+            if (!name) return official.apply(this, arguments);
+
+            event.preventDefault();
+            window.buySellPanelApp.currentMode = isWTB ? "buy" : "sell";
+            var rank = name.getAttribute("rank");
+            return window.showBuySellPanelWithItem(inventoryEnglishName(name), rank == null ? 0 : parseInt(rank, 10));
+        };
+        console.info("[AlecaFrame 中文市场] 库存买卖查询已保留英文原名");
+    }
+
     function textNode(node) {
         var parent = node.parentElement;
         if (!parent || /^(SCRIPT|STYLE|NOSCRIPT|TEXTAREA|CODE|PRE)$/.test(parent.tagName) || parent.isContentEditable) return;
-        var oldValue = node.nodeValue;
-        var newValue = lookup(oldValue);
+        if (parent.closest(".inventorySellPanelListingName")) return;
+        var marketName = parent.closest(marketNameSelector);
+        if (marketName) { refreshMarketName(marketName); return; }
+        if (parent.closest(".wfmGuessesHolder")) {
+            var guess = itemPair(node.nodeValue);
+            if (guess && node.nodeValue.trim() !== guess.en) node.nodeValue = guess.en;
+            return;
+        }
+        var oldValue = sourceText(node);
+        var newValue = lookup(oldValue, parent);
         if (newValue === null) return;
         var lead = /^\s*/.exec(oldValue)[0];
         var tail = /\s*$/.exec(oldValue)[0];
-        node.nodeValue = lead + newValue + tail;
+        var display = lead + newValue + tail;
+        sourceTexts.set(node, { original: oldValue, display: display });
+        if (node.nodeValue !== display) node.nodeValue = display;
     }
 
     function elementAttributes(element) {
+        if (element.closest(marketNameSelector)) return;
+        // Vue can replace the overlay button after the official tooltip was
+        // attached. Restore its Chinese help on the button that is displayed.
+        if (element.id === "pushToRelicRecommendationOverlay" && typeof window.tippy === "function" && !element._tippy) {
+            window.tippy(element, {
+                content: translations["Push your current filters to the overlay."],
+                duration: 190, arrow: true, placement: "top", theme: "extraVaultedInfoTheme", animation: "fade", allowHTML: true
+            });
+        }
+        var sources = sourceAttributes.get(element);
+        if (!sources) { sources = Object.create(null); sourceAttributes.set(element, sources); }
         for (var i = 0; i < attrNames.length; i++) {
             var attr = attrNames[i];
             if (!element.hasAttribute(attr)) continue;
             var value = element.getAttribute(attr);
-            var replacement = lookup(value);
-            if (replacement !== null) element.setAttribute(attr, replacement);
+            var saved = sources[attr];
+            var original = saved && value === saved.display ? saved.original : value;
+            var replacement = lookup(original, element);
+            if (replacement !== null) {
+                sources[attr] = { original: original, display: replacement };
+                if (replacement !== value) element.setAttribute(attr, replacement);
+            }
         }
     }
 
@@ -81,7 +294,14 @@
     function start() {
         document.documentElement.lang = "zh-CN";
         if (!document.body) return;
+        installInventoryMarketBridge();
         walk(document.body);
+        var style = document.createElement("style");
+        style.textContent = '[data-zh-toggle="true"]{cursor:pointer}[data-zh-toggle="true"]:hover{text-decoration:underline}[data-zh-toggle="true"]:focus-visible{outline:1px solid currentColor;outline-offset:3px}';
+        document.head.appendChild(style);
+        document.addEventListener("click", toggleMarketName, true);
+        document.addEventListener("keydown", toggleMarketName, true);
+        loadItemNames();
         var observer = new MutationObserver(function (mutations) {
             mutations.forEach(function (mutation) {
                 if (mutation.type === "childList") mutation.addedNodes.forEach(queue);

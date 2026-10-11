@@ -16,6 +16,11 @@ namespace AlecaFrameZh
         private static readonly object MapLock = new object();
         private static Dictionary<string, string> names;
 
+        public static string GetDisplayName(string english, string fallback)
+        {
+            return ItemNames.Chinese(english, fallback);
+        }
+
         public static bool IsChineseGame()
         {
             try
@@ -229,6 +234,8 @@ namespace AlecaFrameZh
                         continue;
                     string chinese = Normalize(parent + suffix);
                     if (!result.ContainsKey(chinese)) result.Add(chinese, english);
+                    string preferred = Normalize(GetDisplayName(english, parent + suffix));
+                    if (!result.ContainsKey(preferred)) result.Add(preferred, english);
                     if (english.EndsWith(" Blueprint", StringComparison.OrdinalIgnoreCase) &&
                         suffix != "蓝图")
                     {

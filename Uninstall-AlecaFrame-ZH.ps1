@@ -109,7 +109,9 @@ if ($versionDirectory) {
     if (Test-Path -LiteralPath $extraRelic) {
         Remove-Item -LiteralPath $extraRelic -Force
     }
-    foreach ($extraNative in @("AlecaFrameClientLib.zh.dll", "AlecaFrameZh.TradeHelper.dll", "AlecaFrameZh.RelicHelper.dll", "ZhRelicOcr.ps1")) {
+    $extraItemNames = Join-Path $versionDirectory.FullName "web\assets\js\item-names.json"
+    if (Test-Path -LiteralPath $extraItemNames) { Remove-Item -LiteralPath $extraItemNames -Force }
+    foreach ($extraNative in @("AlecaFrameClientLib.zh.dll", "AlecaFrameZh.TradeHelper.dll", "AlecaFrameZh.RelicHelper.dll", "ZhRelicOcr.ps1", "item-names.json")) {
         $path = Join-Path $versionDirectory.FullName "NET\$extraNative"
         if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
     }
