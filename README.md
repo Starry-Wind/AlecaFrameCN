@@ -5,7 +5,7 @@
 - 加载简体中文界面。
 - 支持在**中文与英文** Warframe 中识别遗物奖励。
 - 支持**中文游戏**的**交易历史解析**与**交易物品名称**汉化。
-- 鉴于作者还是萌新，当前汉化仍然不完全（武器名称、黑话、紫卡），欢迎各位大佬贡献。
+- 鉴于作者还是萌新，当前汉化仍然不完全（黑话、随机紫卡名称），欢迎各位大佬贡献。
 
 ## 使用方法
 
@@ -35,10 +35,9 @@
 
 
 
-## 源码与许可
 
-`Build.ps1` 使用 Windows 的 .NET Framework 编译器，并引用用户已经安装的 AlecaFrame 中的 `Newtonsoft.Json.dll`。编译产物只写到本机 `build/`。中文遗物识别读取 AlecaFrame 本机的截图和物品词库，结果只写到 `%LOCALAPPDATA%\AlecaFrame-ZH-Patch`。英文等官方已支持的游戏语言仍由原识别流程处理。
 
 
 ## 参考仓库
 界面翻译与部分实现参考项目 [AlecaFrame-ZH-](https://github.com/191086215333/AlecaFrame-ZH-)
+词库参考项目 [wfm-docs](https://github.com/42bytes-team/wfm-docs)
