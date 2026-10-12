@@ -329,6 +329,8 @@ function Add-ChineseFiles {
             -Destination (Join-Path $VersionPath "NET\AlecaFrameClientLib.zh.dll") -Force
         Copy-Item -LiteralPath (Join-Path $tradeBuildRoot "AlecaFrameZh.TradeHelper.dll") `
             -Destination (Join-Path $VersionPath "NET\AlecaFrameZh.TradeHelper.dll") -Force
+        Copy-Item -LiteralPath (Join-Path $tradeBuildRoot "ZhRelicOcr.ps1") `
+            -Destination (Join-Path $VersionPath "NET\ZhRelicOcr.ps1") -Force
     }
     $manifestPath = Join-Path $VersionPath "manifest.json"
     $manifestText = [IO.File]::ReadAllText($manifestPath, [Text.Encoding]::UTF8)
@@ -548,6 +550,7 @@ try {
                 $tail = Get-Content -LiteralPath $mainLog -Tail 40 -ErrorAction SilentlyContinue
                 if (($tail -match "\[AlecaFrame 中文补丁\] 已加载") -and
                     ($tail -match "\[AlecaFrame 中文交易\] 原生解析器已加载") -and
+                    ($tail -match "\[AlecaFrame 中文遗物推荐\] 原生补丁已加载") -and
                     ($tail -match "\[AlecaFrame 中文物品\] 已加载")) {
                     $loaded = $true
                     break
@@ -556,7 +559,7 @@ try {
         }
     }
     if (-not $loaded) {
-        throw "中文界面或交易解析器未能加载，请查看 $stateRoot\launcher.log 和 MainWindow.html.log"
+        throw "中文界面、交易解析器或遗物推荐补丁未能加载，请查看 $stateRoot\launcher.log 和 MainWindow.html.log"
     }
 
     # A renderer launch can finish a delayed OPK recovery after the earlier
@@ -590,7 +593,7 @@ try {
         throw "中文交易插件入口未能保留。"
     }
 
-    Write-LauncherLog "Chinese UI loaded; relic fallback and Chinese trade parser ready for in-game validation"
+    Write-LauncherLog "Chinese UI loaded; relic fallback, Chinese trade parser and relic recommendation patch ready for in-game validation"
 }
 catch {
     Write-LauncherLog "ERROR: $($_.Exception.Message)"

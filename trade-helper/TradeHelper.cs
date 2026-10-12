@@ -11,8 +11,8 @@ using Newtonsoft.Json.Linq;
 
 namespace AlecaFrameZh
 {
-    // Only the trade pipeline calls this helper. Game language and relic OCR
-    // remain under the control of the official plugin / existing relic patch.
+    // The trade and recommendation patches share the read-only game language
+    // check. This never changes the official plugin's global language value.
     public static class TradeHelper
     {
         // The override is used only by offline tests / replay, never by the launcher.

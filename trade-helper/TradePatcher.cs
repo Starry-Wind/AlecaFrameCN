@@ -1,4 +1,5 @@
 using System;
+using System.Drawing;
 using System.IO;
 using System.Linq;
 using Mono.Cecil;
@@ -103,15 +104,54 @@ internal static class TradePatcher
                 il.Append(il.Create(OpCodes.Call, import("GetTradeDisplayNames")));
                 il.Append(il.Create(OpCodes.Ret));
 
+                PatchRelicRecommendation(module, helper);
+
                 // Inserted instructions can push an existing short branch past
                 // its signed-byte range. Widen all short branches in edited code.
                 foreach (var method in new [] { enabled, beginning, process, convert, finish }) WidenBranches(method);
                 assembly.Write(args[2]);
             }
-            Console.WriteLine("Chinese trade patch built: " + args[2]);
+            Console.WriteLine("Chinese trade and relic recommendation patch built: " + args[2]);
             return 0;
         }
         catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+
+    private static void PatchRelicRecommendation(ModuleDefinition module, AssemblyDefinition helper)
+    {
+        var overlays = module.Types.Single(t => t.FullName == "AlecaFrameClientLib.Utils.OverlaysHandler");
+        var method = overlays.Methods.Single(m => m.Name == "OpenRelicRecommendationHandler");
+        var recommendation = helper.MainModule.Types.Single(t => t.FullName == "AlecaFrameZh.RelicRecommendation");
+        Func<string, MethodReference> import = name => module.ImportReference(recommendation.Methods.Single(m => m.Name == name));
+        var languageCall = method.Body.Instructions.Single(i => i.OpCode == OpCodes.Call &&
+            i.Operand is MethodReference && ((MethodReference)i.Operand).FullName.Contains("Misc::GetWarframeLanguage("));
+        var ocrCall = method.Body.Instructions.Single(i => i.OpCode == OpCodes.Call &&
+            i.Operand is MethodReference && ((MethodReference)i.Operand).Name == "SendRAWRivenOCR");
+        var english = module.Types.Single(t => t.FullName == "AlecaFrameClientLib.Utils.Misc")
+            .NestedTypes.Single(t => t.Name == "WarframeLanguage").Fields.Single(f => f.Name == "English");
+        var il = method.Body.GetILProcessor();
+        // Change only this handler's local language value, leaving global game
+        // language, reward OCR, Russian and other unsupported languages intact.
+        var englishValue = il.Create(OpCodes.Ldc_I4, Convert.ToInt32(english.Constant));
+        il.InsertAfter(languageCall, englishValue);
+        il.InsertAfter(englishValue, il.Create(OpCodes.Call, import("GetSupportedLanguage")));
+
+        // Pass the original OCR as a delegate so supported languages keep the
+        // original path and the helper has no circular dependency on the client.
+        var originalOcr = (MethodReference)ocrCall.Operand;
+        var delegateConstructor = module.ImportReference(typeof(Func<Bitmap, string>).GetConstructors().Single());
+        il.InsertBefore(ocrCall, il.Create(OpCodes.Ldnull));
+        il.InsertBefore(ocrCall, il.Create(OpCodes.Ldftn, originalOcr));
+        il.InsertBefore(ocrCall, il.Create(OpCodes.Newobj, delegateConstructor));
+        ocrCall.Operand = import("ReadCategory");
+        WidenBranches(method);
+
+        var wrapper = module.Types.Single(t => t.FullName == "AlecaFrameClientLib.OverwolfWrapper");
+        var version = new MethodDefinition("GetRelicRecommendationPatchVersionZH", MethodAttributes.Public | MethodAttributes.HideBySig, module.TypeSystem.String);
+        wrapper.Methods.Add(version);
+        var versionIl = version.Body.GetILProcessor();
+        versionIl.Append(versionIl.Create(OpCodes.Ldstr, "3"));
+        versionIl.Append(versionIl.Create(OpCodes.Ret));
     }
 
     private static void AddTruePrefix(MethodDefinition method, MethodReference condition)

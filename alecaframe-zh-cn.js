@@ -322,6 +322,11 @@
                     console.info("[AlecaFrame 中文交易] 原生解析器已加载");
                 }
             } catch (error) { console.error("[AlecaFrame 中文交易] 原生解析器未加载", error); }
+            try {
+                if (plugin.get().GetRelicRecommendationPatchVersionZH() === "3") {
+                    console.info("[AlecaFrame 中文遗物推荐] 原生补丁已加载（v3）");
+                }
+            } catch (error) { console.error("[AlecaFrame 中文遗物推荐] 原生补丁未加载", error); }
         }
     }
 
