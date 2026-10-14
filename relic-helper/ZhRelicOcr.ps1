@@ -1,4 +1,4 @@
-﻿param([Parameter(Mandatory=$true)][string]$ImageDirectory,[switch]$SortByX)
+﻿param([Parameter(Mandatory=$true)][string]$ImageDirectory,[switch]$SortByX,[switch]$LineBounds)
 $ErrorActionPreference='Stop'
 [void][Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType=WindowsRuntime]
 [void][Windows.Graphics.Imaging.BitmapDecoder, Windows.Foundation, ContentType=WindowsRuntime]
@@ -34,7 +34,22 @@ Get-ChildItem -LiteralPath $ImageDirectory -Filter '*.png' -File |
                 if ($SortByX) {
                     $lines=$lines | Sort-Object { if ($_.Words.Count -gt 0) { $_.Words[0].BoundingRect.X } else { [double]::MaxValue } }
                 }
-                $value=($lines | ForEach-Object {$_.Text}) -join [Environment]::NewLine
+                if ($LineBounds) {
+                    $rows=@($lines | ForEach-Object {
+                        $left=[double]::MaxValue; $top=[double]::MaxValue; $right=0; $bottom=0
+                        foreach ($word in $_.Words) {
+                            $rect=$word.BoundingRect
+                            $left=[Math]::Min($left,$rect.X); $top=[Math]::Min($top,$rect.Y)
+                            $right=[Math]::Max($right,$rect.X+$rect.Width); $bottom=[Math]::Max($bottom,$rect.Y+$rect.Height)
+                        }
+                        if ($_.Words.Count -gt 0) {
+                            @{text=$_.Text;x=$left;y=$top;width=$right-$left;height=$bottom-$top}
+                        }
+                    })
+                    $value=ConvertTo-Json -InputObject $rows -Compress
+                } else {
+                    $value=($lines | ForEach-Object {$_.Text}) -join [Environment]::NewLine
+                }
                 $encoded=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($value))
                 [Console]::Out.WriteLine($(if ($encoded.Length -eq 0) { '-' } else { $encoded }))
             } finally { $bitmap.Dispose() }

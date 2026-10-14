@@ -15,9 +15,10 @@ $itemNames = Join-Path $itemNamesRoot 'item-names.json'
 $itemSource = Join-Path $itemNamesRoot 'ItemNames.cs'
 $relicRoot = Join-Path $packageRoot 'relic-helper'
 $relicSource = Join-Path $relicRoot 'RelicHelper.cs'
+$layoutSource = Join-Path $relicRoot 'RelicLayout.cs'
 $recommendationSource = Join-Path $relicRoot 'RelicRecommendation.cs'
 $ocrScript = Join-Path $relicRoot 'ZhRelicOcr.ps1'
-foreach ($required in @($compiler, $netstandard, $cecil, $client, $public, $json, $itemNames, $itemSource, $relicSource, $recommendationSource, $ocrScript)) {
+foreach ($required in @($compiler, $netstandard, $cecil, $client, $public, $json, $itemNames, $itemSource, $relicSource, $layoutSource, $recommendationSource, $ocrScript)) {
     if (-not (Test-Path -LiteralPath $required)) { throw "交易汉化构建缺少文件：$required" }
 }
 $expectedClientHash = '077E0DBF89265AE08BF5C907ABBF1232DA168B2376FD636563EFDB8027522972'
@@ -32,7 +33,7 @@ foreach ($dependency in @($cecil, $public, $json)) {
 }
 $helper = Join-Path $OutputRoot 'AlecaFrameZh.TradeHelper.dll'
 $patcher = Join-Path $OutputRoot 'TradePatcher.exe'
-& $compiler /nologo /target:library /optimize+ "/out:$helper" /reference:System.Drawing.dll "/reference:$netstandard" "/reference:$public" "/reference:$json" (Join-Path $PSScriptRoot 'TradeHelper.cs') $itemSource $relicSource $recommendationSource
+& $compiler /nologo /target:library /optimize+ "/out:$helper" /reference:System.Drawing.dll "/reference:$netstandard" "/reference:$public" "/reference:$json" (Join-Path $PSScriptRoot 'TradeHelper.cs') $itemSource $relicSource $layoutSource $recommendationSource
 if ($LASTEXITCODE -ne 0) { throw '中文交易解析器编译失败。' }
 & $compiler /nologo /target:exe /optimize+ "/out:$patcher" /reference:System.Drawing.dll "/reference:$cecil" (Join-Path $PSScriptRoot 'TradePatcher.cs')
 if ($LASTEXITCODE -ne 0) { throw '中文交易补丁构建器编译失败。' }

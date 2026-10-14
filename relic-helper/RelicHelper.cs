@@ -7,14 +7,22 @@ using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using Newtonsoft.Json.Linq;
 
 namespace AlecaFrameZh
 {
+    public sealed class OcrTextLine
+    {
+        public string Text;
+        public double X, Y, Width, Height;
+    }
+
     public static class RelicHelper
     {
         private static readonly object MapLock = new object();
         private static Dictionary<string, string> names;
+        private static readonly HashSet<string> componentAliases = new HashSet<string>(StringComparer.Ordinal);
 
         public static string GetDisplayName(string english, string fallback)
         {
@@ -113,19 +121,163 @@ namespace AlecaFrameZh
             return english == null ? null : english.ToLowerInvariant();
         }
 
+        public static List<OcrTextLine> RecognizeTextLines(Bitmap image)
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "AlecaFrameZhOcr", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                int height = Math.Max(1, Math.Min(image.Height, (int)(1600.0 * image.Height / image.Width)));
+                using (Bitmap normalized = ResizeRegion(image, new Rectangle(0, 0, image.Width, image.Height), height))
+                    normalized.Save(Path.Combine(dir, "00.png"), ImageFormat.Png);
+                string json = RunOcr(dir, false, true).Single();
+                return JArray.Parse(json).Select(line => new OcrTextLine {
+                    Text = (string)line["text"], X = (double)line["x"], Y = (double)line["y"],
+                    Width = (double)line["width"], Height = (double)line["height"]
+                }).ToList();
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
+        public static List<string> RecognizeRewardCards(Bitmap image, RewardLayout layout)
+        {
+            int[] quantities;
+            return RecognizeRewardCards(image, layout, out quantities);
+        }
+
+        public static List<string> RecognizeRewardCards(Bitmap image, RewardLayout layout, out int[] quantities)
+        {
+            quantities = new int[layout.Names.Length];
+            List<Bitmap> variants = new List<Bitmap>();
+            try
+            {
+                foreach (Rectangle area in layout.Names)
+                {
+                    using (Bitmap enlarged = ResizeRegion(image, area, 110))
+                    {
+                        variants.Add((Bitmap)enlarged.Clone());
+                        variants.Add(TextMask(enlarged, 90, 65, 18, 7));
+                        variants.Add(TextMask(enlarged, 140, 105, 27, 13));
+                        variants.Add(Invert(enlarged));
+                    }
+                }
+                List<string> observations = RecognizeRawBatch(variants);
+                List<string> names = new List<string>();
+                for (int i = 0; i < layout.Names.Length; i++)
+                {
+                    string[] readings = observations.Skip(i * 4).Take(4).ToArray();
+                    string winner = ResolveRewardReadings(readings);
+                    if (winner == null)
+                    {
+                        // A selected card can wash out its gold letters. Retry
+                        // that same card at two raster sizes, never fewer cards.
+                        List<Bitmap> retry = new List<Bitmap>();
+                        try
+                        {
+                            foreach (int height in new[] { 75, 160 })
+                                using (Bitmap enlarged = ResizeRegion(image, layout.Names[i], height))
+                                {
+                                    retry.Add((Bitmap)enlarged.Clone());
+                                    retry.Add(TextMask(enlarged, 135, 95, 23, 10));
+                                }
+                            readings = readings.Concat(RecognizeRawBatch(retry)).ToArray();
+                            winner = ResolveRewardReadings(readings);
+                        }
+                        finally { foreach (Bitmap bitmap in retry) bitmap.Dispose(); }
+                    }
+                    if (Environment.GetEnvironmentVariable("ALECAFRAME_ZH_OCR_DEBUG") == "1")
+                        Console.Error.WriteLine("card=" + i + " area=" + layout.Names[i] + " OCR=" +
+                            String.Join(" || ", readings.Select(value => value.Replace("\n", " "))) + " result=" + winner);
+                    if (winner == null)
+                        throw new InvalidOperationException("检测到 " + layout.Names.Length + " 张奖励卡片，但第 " +
+                            (i + 1) + " 件文字未能可靠识别；不会隐藏其他奖励或减少奖励数量");
+                    names.Add(winner);
+                    var amounts = readings.Select(value => Regex.Match(value, @"^\s*(?<count>[1-9][0-9]{0,2})\s*[xX×]\s*"))
+                        .Where(match => match.Success).Select(match => Int32.Parse(match.Groups["count"].Value))
+                        .GroupBy(amount => amount).OrderByDescending(group => group.Count()).ToList();
+                    quantities[i] = amounts.Count > 0 && amounts[0].Count() >= 2 ? amounts[0].Key : 1;
+                }
+                return names;
+            }
+            finally { foreach (Bitmap variant in variants) variant.Dispose(); }
+        }
+
+        private static string ResolveRewardReadings(IEnumerable<string> readings)
+        {
+            var resolved = readings.Select(ResolveOne).Where(name => name != null)
+                .GroupBy(name => name).OrderByDescending(group => group.Count()).ToList();
+            if (resolved.Count > 0 && resolved[0].Count() >= 2 &&
+                (resolved.Count == 1 || resolved[0].Count() > resolved[1].Count())) return resolved[0].Key;
+            return ResolveEvidence(readings);
+        }
+
+        private static Bitmap ResizeRegion(Bitmap image, Rectangle area, int targetHeight)
+        {
+            int width = Math.Max(1, (int)Math.Round(area.Width * targetHeight / (double)area.Height));
+            Bitmap result = new Bitmap(width, targetHeight);
+            using (Graphics graphics = Graphics.FromImage(result))
+            {
+                graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                graphics.DrawImage(image, new Rectangle(0, 0, width, targetHeight), area, GraphicsUnit.Pixel);
+            }
+            return result;
+        }
+
+        private static Bitmap TextMask(Bitmap image, int minRed, int minGreen, int redBlue, int greenBlue)
+        {
+            Bitmap result = new Bitmap(image.Width, image.Height);
+            for (int y = 0; y < image.Height; y++)
+                for (int x = 0; x < image.Width; x++)
+                {
+                    Color color = image.GetPixel(x, y);
+                    result.SetPixel(x, y, color.R > minRed && color.G > minGreen &&
+                        color.R - color.B > redBlue && color.G - color.B > greenBlue ? Color.Black : Color.White);
+                }
+            return result;
+        }
+
+        private static Bitmap Invert(Bitmap image)
+        {
+            Bitmap result = new Bitmap(image.Width, image.Height);
+            using (Graphics graphics = Graphics.FromImage(result))
+            using (ImageAttributes attributes = new ImageAttributes())
+            {
+                attributes.SetColorMatrix(new ColorMatrix(new float[][] {
+                    new float[] { -1, 0, 0, 0, 0 }, new float[] { 0, -1, 0, 0, 0 },
+                    new float[] { 0, 0, -1, 0, 0 }, new float[] { 0, 0, 0, 1, 0 },
+                    new float[] { 1, 1, 1, 0, 1 }
+                }));
+                graphics.DrawImage(image, new Rectangle(0, 0, result.Width, result.Height),
+                    0, 0, image.Width, image.Height, GraphicsUnit.Pixel, attributes);
+            }
+            return result;
+        }
+
         public static string ResolveEvidence(IEnumerable<string> observations)
         {
             List<string> keys = observations.Where(value => !String.IsNullOrWhiteSpace(value))
-                .Select(NormalizeOcr).Where(value => value.Length >= 5).ToList();
+                .Select(NormalizeOcr).Where(value => value.Length >= 5 &&
+                    !value.StartsWith("prime", StringComparison.Ordinal)).ToList();
+            // Strong masks can erase a wrapped second line at low resolution.
+            // Compare the complete readings; a much shorter fragment is not an
+            // independent vote for a different Prime component.
+            if (keys.Count > 0)
+            {
+                int longest = keys.Max(value => value.Length);
+                keys = keys.Where(value => value.Length >= longest * 0.7).ToList();
+            }
             if (keys.Count < 2) return null;
             Dictionary<string, int> totals = new Dictionary<string, int>(StringComparer.Ordinal);
             Dictionary<string, int> closest = new Dictionary<string, int>(StringComparer.Ordinal);
             foreach (string key in keys)
             {
+                bool hasPartText = HasPartText(key);
                 Dictionary<string, int> current = new Dictionary<string, int>(StringComparer.Ordinal);
                 foreach (KeyValuePair<string, string> candidate in GetNames())
                 {
-                    int score = Distance(key, candidate.Key);
+                    if (!hasPartText && componentAliases.Contains(candidate.Key)) continue;
+                    int score = MatchDistance(key, candidate.Key);
                     int previous;
                     if (!current.TryGetValue(candidate.Value, out previous) || score < previous)
                         current[candidate.Value] = score;
@@ -145,7 +297,7 @@ namespace AlecaFrameZh
             if (ranked.Count < 2) return null;
             string winner = ranked[0].Key;
             if (ranked[0].Value > keys.Count * 5 ||
-                ranked[1].Value - ranked[0].Value < 2 || closest[winner] > 3)
+                ranked[1].Value - ranked[0].Value < 2 || closest[winner] > 4)
                 return null;
             return winner.ToLowerInvariant();
         }
@@ -173,7 +325,7 @@ namespace AlecaFrameZh
             return result;
         }
 
-        private static List<string> RunOcr(string dir, bool sortByX)
+        private static List<string> RunOcr(string dir, bool sortByX, bool lineBounds = false)
         {
             string script = Path.Combine(Path.GetDirectoryName(typeof(RelicHelper).Assembly.Location), "ZhRelicOcr.ps1");
             if (!File.Exists(script))
@@ -184,20 +336,24 @@ namespace AlecaFrameZh
                 "WindowsPowerShell", "v1.0", "powershell.exe");
             ProcessStartInfo info = new ProcessStartInfo(shell,
                 "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\" -ImageDirectory \"" + dir + "\"" +
-                (sortByX ? " -SortByX" : ""));
+                (sortByX ? " -SortByX" : "") + (lineBounds ? " -LineBounds" : ""));
             info.UseShellExecute = false;
             info.CreateNoWindow = true;
             info.RedirectStandardOutput = true;
             info.RedirectStandardError = true;
             using (Process process = Process.Start(info))
             {
+                // Bound information can exceed a pipe's buffer. Drain both
+                // streams while OCR runs rather than waiting before reading.
+                var outputTask = process.StandardOutput.ReadToEndAsync();
+                var errorTask = process.StandardError.ReadToEndAsync();
                 if (!process.WaitForExit(25000))
                 {
                     try { process.Kill(); } catch { }
                     throw new TimeoutException("中文遗物识别超时");
                 }
-                string output = process.StandardOutput.ReadToEnd();
-                string error = process.StandardError.ReadToEnd();
+                string output = outputTask.Result;
+                string error = errorTask.Result;
                 if (process.ExitCode != 0)
                     throw new InvalidOperationException("中文遗物识别失败：" + error.Trim());
                 return output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
@@ -236,6 +392,22 @@ namespace AlecaFrameZh
                     if (!result.ContainsKey(chinese)) result.Add(chinese, english);
                     string preferred = Normalize(GetDisplayName(english, parent + suffix));
                     if (!result.ContainsKey(preferred)) result.Add(preferred, english);
+                    // At low resolution the Chinese OCR engine can omit the
+                    // small Latin "Prime" between an English Warframe name
+                    // and its Chinese component. Keep both the base name and
+                    // component in the alias; a bare Warframe is insufficient.
+                    bool warframePart = english.EndsWith(" Chassis Blueprint", StringComparison.Ordinal) ||
+                        english.EndsWith(" Systems Blueprint", StringComparison.Ordinal) ||
+                        english.EndsWith(" Neuroptics Blueprint", StringComparison.Ordinal);
+                    if (warframePart && Regex.IsMatch(preferred, @"^[a-z0-9]+prime") && HasPartText(preferred))
+                    {
+                        string mixedScriptAlias = preferred.Replace("prime", "");
+                        if (!result.ContainsKey(mixedScriptAlias))
+                        {
+                            result.Add(mixedScriptAlias, english);
+                            componentAliases.Add(mixedScriptAlias);
+                        }
+                    }
                     if (english.EndsWith(" Blueprint", StringComparison.OrdinalIgnoreCase) &&
                         suffix != "蓝图")
                     {
@@ -258,6 +430,7 @@ namespace AlecaFrameZh
         private static string Resolve(string ocr, Dictionary<string, string> map)
         {
             string key = NormalizeOcr(ocr);
+            if (key.StartsWith("prime", StringComparison.Ordinal)) return null;
             if (key.EndsWith("prime监", StringComparison.Ordinal))
                 key = key.Substring(0, key.Length - 1) + "蓝图";
             else if (key.EndsWith("prime蓝", StringComparison.Ordinal))
@@ -267,9 +440,11 @@ namespace AlecaFrameZh
             string bestName = null;
             int best = Int32.MaxValue, second = Int32.MaxValue;
             Dictionary<string, int> scores = new Dictionary<string, int>(StringComparer.Ordinal);
+            bool hasPartText = HasPartText(key);
             foreach (KeyValuePair<string, string> candidate in map)
             {
-                int score = Distance(key, candidate.Key);
+                if (!hasPartText && componentAliases.Contains(candidate.Key)) continue;
+                int score = MatchDistance(key, candidate.Key);
                 int previous;
                 if (!scores.TryGetValue(candidate.Value, out previous) || score < previous)
                     scores[candidate.Value] = score;
@@ -290,12 +465,39 @@ namespace AlecaFrameZh
                 .Where(Char.IsLetterOrDigit).ToArray());
         }
 
+        private static bool HasPartText(string value)
+        {
+            return value.Replace("蓝图", "").Any(character => character >= '\u3400' && character <= '\u9fff');
+        }
+
         private static string NormalizeOcr(string value)
         {
+            // Reward bundles display e.g. "2 X Forma 蓝图". The multiplier is
+            // separate from the item's canonical English identity and ID.
+            value = Regex.Replace(value, @"^\s*[1-9][0-9]{0,2}\s*[xX×]\s*", "");
             return Normalize(value).Replace("礻几体", "机体")
                 .Replace("枳体", "机体")
                 .Replace("枧体", "机体")
                 .Replace("几体", "机体");
+        }
+
+        private static int MatchDistance(string observed, string candidate)
+        {
+            int score = Distance(observed, candidate);
+            int sourcePrime = observed.IndexOf("prime", StringComparison.Ordinal);
+            int targetPrime = candidate.IndexOf("prime", StringComparison.Ordinal);
+            if (sourcePrime > 0 && targetPrime > 0)
+            {
+                string sourceParent = observed.Substring(0, sourcePrime);
+                string targetParent = candidate.Substring(0, targetPrime);
+                char[] parentLetters = sourceParent.Where(character => character >= '\u3400' && character <= '\u9fff').ToArray();
+                // A missing parent glyph and a contradictory parent glyph can
+                // have the same edit distance. Shared Prime/component text
+                // must not outweigh the parent characters actually observed.
+                if (parentLetters.Length > 0 && HasPartText(targetParent) &&
+                    !parentLetters.Any(character => targetParent.IndexOf(character) >= 0)) score++;
+            }
+            return score;
         }
 
         private static int Distance(string a, string b)

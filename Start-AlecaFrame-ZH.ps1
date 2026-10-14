@@ -457,6 +457,7 @@ try {
     }
     foreach ($required in @($relicScriptSource, $itemNamesSource, (Join-Path $itemNamesRoot "ItemNames.cs"), (Join-Path $itemNamesRoot "ItemNamesUpdater.cs"), (Join-Path $PSScriptRoot "Build.ps1"),
         (Join-Path $PSScriptRoot "Settings.ps1"),
+        (Join-Path $relicPatchRoot "RelicLayout.cs"),
         (Join-Path $tradePatchRoot "Build-TradePatch.ps1"),
         (Join-Path $tradePatchRoot "Patch-TradePage.ps1"),
         (Join-Path $tradePatchRoot "TradeHelper.cs"),

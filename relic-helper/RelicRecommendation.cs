@@ -3,6 +3,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Linq;
 using System.Text.RegularExpressions;
 
 namespace AlecaFrameZh
@@ -11,6 +12,22 @@ namespace AlecaFrameZh
     // handler calls these methods; other OCR and language checks stay official.
     public static class RelicRecommendation
     {
+        public static Bitmap CreateHeader(int officialWidth, int officialHeight)
+        {
+            if (!TradeHelper.IsChineseGame()) return new Bitmap(officialWidth, officialHeight);
+            // Cover the header across narrow, wide and scaled game UIs. Choose
+            // the largest era heading below instead of assuming its pixels.
+            return new Bitmap(Math.Max(1, (int)(officialWidth / 0.15 * 0.5)),
+                Math.Max(1, (int)(officialHeight / 0.12 * 0.28)));
+        }
+
+        public static void DrawHeader(Graphics graphics, Image screenshot, Point officialOrigin)
+        {
+            if (!TradeHelper.IsChineseGame()) { graphics.DrawImage(screenshot, officialOrigin); return; }
+            graphics.DrawImage(screenshot, new Rectangle(0, 0, screenshot.Width, screenshot.Height),
+                new Rectangle(0, 0, screenshot.Width, screenshot.Height), GraphicsUnit.Pixel);
+        }
+
         public static int GetSupportedLanguage(int originalLanguage, int englishLanguage)
         {
             if (!TradeHelper.IsChineseGame()) return originalLanguage;
@@ -24,9 +41,10 @@ namespace AlecaFrameZh
             try
             {
                 SaveCrop(image);
-                string raw = RelicHelper.RecognizeRaw(image);
+                var lines = RelicHelper.RecognizeTextLines(image);
+                string raw = String.Join("\n", lines.Select(line => line.Text));
                 string originalRaw = raw;
-                string category = ResolveCategory(raw);
+                string category = ResolveHeading(lines);
                 if (category == null)
                 {
                     // Short headings can be missed on the game's dark panel.
@@ -43,8 +61,9 @@ namespace AlecaFrameZh
                         }));
                         graphics.DrawImage(image, new Rectangle(0, 0, enlarged.Width, enlarged.Height),
                             0, 0, image.Width, image.Height, GraphicsUnit.Pixel, attributes);
-                        raw = RelicHelper.RecognizeRaw(enlarged);
-                        category = ResolveCategory(raw);
+                        lines = RelicHelper.RecognizeTextLines(enlarged);
+                        raw = String.Join("\n", lines.Select(line => line.Text));
+                        category = ResolveHeading(lines);
                     }
                 }
                 Log("纪元识别：原图=" + Flatten(originalRaw) + "; 处理后=" + Flatten(raw) + " -> " + (category ?? "未识别"));
@@ -56,6 +75,13 @@ namespace AlecaFrameZh
                 // The official handler retries and displays its normal error.
                 return "";
             }
+        }
+
+        private static string ResolveHeading(System.Collections.Generic.List<OcrTextLine> lines)
+        {
+            var heading = lines.Where(line => ResolveCategory(line.Text) != null)
+                .OrderByDescending(line => line.Height).ThenBy(line => line.Y).ThenBy(line => line.X).FirstOrDefault();
+            return heading == null ? null : ResolveCategory(heading.Text);
         }
 
         public static string ResolveCategory(string text)

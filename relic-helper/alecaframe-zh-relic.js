@@ -1,28 +1,50 @@
 // Runs only in AlecaFrame's relic overlay. The official callback remains the
 // source of truth for every language it already supports.
 function GetRelicWindowDataZH(testMode, callback) {
+    const requestId = (GetRelicWindowDataZH.requestId || 0) + 1;
+    GetRelicWindowDataZH.requestId = requestId;
     const native = plugin.get();
     native.GetRelicWindowData(testMode, (success, data, timeLeftSeconds) => {
+        if (GetRelicWindowDataZH.requestId !== requestId) return;
         if (success || !String(data).includes("Unsupported Warframe language")) {
             callback(success, data, timeLeftSeconds);
             return;
         }
         console.log("[AlecaFrame 中文遗物] 官方识别返回不支持语言，开始读取本机结果");
 
-        const finish = (rewards) => {
+        const verifyDisplay = expectedCount => {
+            if (typeof document === "undefined" || !window.relicsApp) return;
+            const verify = () => {
+                if (GetRelicWindowDataZH.requestId !== requestId) return;
+                const modelCount = relicsApp.relics.length;
+                const renderedCount = document.querySelectorAll(".relicHolder > .relic").length;
+                const message = "[AlecaFrame 中文遗物] 卡片校验：画面=" + expectedCount +
+                    "，数据=" + modelCount + "，界面=" + renderedCount;
+                if (modelCount !== expectedCount || renderedCount !== expectedCount) console.error(message);
+                else console.log(message);
+            };
+            if (typeof relicsApp.$nextTick === "function") relicsApp.$nextTick(verify);
+            else Promise.resolve().then(verify);
+        };
+        const finish = (rewards, expectedCount) => {
             const payload = {
                 relicRewards: rewards,
                 globalData: { platinum: -1, ducats: -1 }
             };
             console.log("[AlecaFrame 中文遗物] 已识别 " + rewards.length + " 件奖励");
             callback(true, JSON.stringify(payload), Math.max(8, Number(timeLeftSeconds) || 0));
+            verifyDisplay(expectedCount);
         };
 
         readLocalResult(startTime - 5000)
             .then(response => {
+                if (GetRelicWindowDataZH.requestId !== requestId) return;
                 if (!response.ok || !Array.isArray(response.rewards) || !response.rewards.length) {
                     throw new Error(response.error || "中文遗物截图识别失败");
                 }
+                const expectedCount = Number(response.expectedCount) || response.rewards.length;
+                if (expectedCount !== response.rewards.length) throw new Error("奖励识别不完整：画面中有 " +
+                    expectedCount + " 件奖励，但仅收到 " + response.rewards.length + " 件");
                 const rewards = response.rewards.map(item => ({
                     name: item.name,
                     englishName: item.englishName,
@@ -39,14 +61,17 @@ function GetRelicWindowDataZH(testMode, callback) {
                     isItemVaulted: item.isItemVaulted,
                     componentData: []
                 }));
-                finish(rewards);
+                finish(rewards, expectedCount);
                 const refresh = () => {
+                    if (GetRelicWindowDataZH.requestId !== requestId) return;
                     if (window.relicsApp) relicsApp.relics = rewards.slice();
+                    verifyDisplay(expectedCount);
                 };
                 fillPrices(native, response.rewards, rewards, refresh);
                 fillFoundry(native, response.rewards, rewards, refresh);
             })
             .catch(error => {
+                if (GetRelicWindowDataZH.requestId !== requestId) return;
                 console.error("[AlecaFrame 中文遗物] " + error);
                 callback(false, String(error.message || error), timeLeftSeconds);
             });
@@ -171,3 +196,38 @@ function fillFoundry(native, source, rewards, refresh) {
         });
     } catch (error) { console.warn("[AlecaFrame 中文遗物] 铸造数据读取失败", error); }
 }
+
+// Keep the official DPI/zoom calculation, then fit the entire panel into the
+// game viewport. Its fixed minimum height otherwise cuts off the 720p footer.
+(function fitRelicOverlayToViewport() {
+    const official = window.calculateContentPixelBounds;
+    if (typeof official !== "function") return;
+    window.calculateContentPixelBounds = function (screenWidth, screenHeight, selectedZoom) {
+        const bounds = official(screenWidth, screenHeight, selectedZoom);
+        if (!(screenWidth > 0 && screenHeight > 0)) return bounds;
+        const margin = Math.max(4, Math.round(Math.min(screenWidth, screenHeight) * 0.01));
+        bounds.width = Math.round(Math.min(bounds.width, screenWidth - margin * 2));
+        bounds.height = Math.round(Math.min(bounds.height, screenHeight * 0.38, screenHeight - margin * 2));
+        bounds.left = Math.round(Math.max(margin, Math.min(bounds.left, screenWidth - margin - bounds.width)));
+        bounds.top = Math.round(Math.max(margin, Math.min(bounds.top, screenHeight - margin - bounds.height)));
+        return bounds;
+    };
+})();
+
+(function fitRelicOwnershipLabels() {
+    if (typeof document === "undefined") return;
+    const style = document.createElement("style");
+    style.textContent = `
+        @media (max-height: 320px), (max-width: 1200px) {
+            .relicPart .relicItemOwnershipInfo { width: 90%; }
+            .relicPart .relicItemOwnershipInfo > :first-child {
+                flex: 1 1 auto; min-width: 0; width: auto;
+                font-size: min(16px, 1.1rem); padding: 2px 6px;
+            }
+            .relicPart .relicItemOwnershipInfo > .relicItemUnlockedCount {
+                flex: 0 0 auto; min-width: max-content; white-space: nowrap;
+                font-size: min(16px, 1.1rem); padding: 2px 5px;
+            }
+        }`;
+    document.head.appendChild(style);
+})();

@@ -130,6 +130,16 @@ internal static class TradePatcher
         var english = module.Types.Single(t => t.FullName == "AlecaFrameClientLib.Utils.Misc")
             .NestedTypes.Single(t => t.Name == "WarframeLanguage").Fields.Single(f => f.Name == "English");
         var il = method.Body.GetILProcessor();
+        var bitmapConstructor = method.Body.Instructions.Single(i => i.OpCode == OpCodes.Newobj &&
+            i.Operand is MethodReference && ((MethodReference)i.Operand).DeclaringType.FullName == "System.Drawing.Bitmap" &&
+            ((MethodReference)i.Operand).Parameters.Count == 2);
+        bitmapConstructor.OpCode = OpCodes.Call;
+        bitmapConstructor.Operand = import("CreateHeader");
+        var drawImage = method.Body.Instructions.Single(i => i.Operand is MethodReference &&
+            ((MethodReference)i.Operand).DeclaringType.FullName == "System.Drawing.Graphics" &&
+            ((MethodReference)i.Operand).Name == "DrawImage");
+        drawImage.OpCode = OpCodes.Call;
+        drawImage.Operand = import("DrawHeader");
         // Change only this handler's local language value, leaving global game
         // language, reward OCR, Russian and other unsupported languages intact.
         var englishValue = il.Create(OpCodes.Ldc_I4, Convert.ToInt32(english.Constant));
@@ -150,7 +160,7 @@ internal static class TradePatcher
         var version = new MethodDefinition("GetRelicRecommendationPatchVersionZH", MethodAttributes.Public | MethodAttributes.HideBySig, module.TypeSystem.String);
         wrapper.Methods.Add(version);
         var versionIl = version.Body.GetILProcessor();
-        versionIl.Append(versionIl.Create(OpCodes.Ldstr, "3"));
+        versionIl.Append(versionIl.Create(OpCodes.Ldstr, "4"));
         versionIl.Append(versionIl.Create(OpCodes.Ret));
     }
 

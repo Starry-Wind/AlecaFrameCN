@@ -33,6 +33,7 @@ internal static class RelicServer
         public string internalName;
         public string parentName;
         public string parentInternalName;
+        public int quantity;
         public int ducats;
         public int totalToOwn;
         public bool isItemVaulted;
@@ -127,8 +128,9 @@ internal static class RelicServer
     private static int PublishResult(string path)
     {
         long sourceMtime = new DateTimeOffset(File.GetLastWriteTimeUtc(path)).ToUnixTimeMilliseconds();
-        List<Reward> rewards = ReadLog(path);
-        WriteResult(new { ok = true, sourceMtime, rewards });
+        int expectedCount;
+        List<Reward> rewards = ReadLogWithCount(path, out expectedCount);
+        WriteResult(new { ok = true, sourceMtime, expectedCount, rewards });
         return rewards.Count;
     }
 
@@ -215,6 +217,13 @@ internal static class RelicServer
 
     private static List<Reward> ReadLog(string path)
     {
+        int expectedCount;
+        return ReadLogWithCount(path, out expectedCount);
+    }
+
+    private static List<Reward> ReadLogWithCount(string path, out int expectedCount)
+    {
+        expectedCount = 0;
         using (ZipArchive zip = ZipFile.OpenRead(path))
         {
             ZipArchiveEntry entry = zip.Entries.FirstOrDefault(e =>
@@ -223,202 +232,16 @@ internal static class RelicServer
             using (Stream imageStream = entry.Open())
             using (Bitmap original = new Bitmap(imageStream))
             {
-                try
-                {
-                    List<string> goldNames = RecognizeGold(original);
-                    EnsureData();
-                    return goldNames.Select(MakeReward).ToList();
-                }
-                catch (InvalidOperationException ex) { Debug("gold recognition: " + ex.Message); }
-                int estimated = 4;
-                try
-                {
-                    List<string> fastNames = RecognizeStrip(original, out estimated);
-                    if (fastNames.Count != estimated)
-                        throw new InvalidOperationException("整幅截图识别数量与奖励卡片数量不一致");
-                    EnsureData();
-                    return fastNames.Select(MakeReward).ToList();
-                }
-                catch (InvalidOperationException ex) { Debug("strip recognition: " + ex.Message); }
-                if (Environment.GetEnvironmentVariable("ALECAFRAME_ZH_OCR_DEBUG") == "1")
-                    Console.Error.WriteLine("estimated count=" + estimated);
-                int[] counts = new[] { estimated, 4, 3, 2, 1 }.Distinct().ToArray();
-                foreach (int count in counts)
-                {
-                    foreach (bool legacy in new[] { false, true })
-                    {
-                        try
-                        {
-                            List<string> names = Recognize(original, count, legacy);
-                            EnsureData();
-                            return names.Select(MakeReward).ToList();
-                        }
-                        catch (InvalidOperationException ex) {
-                            Debug("count=" + count + " legacy=" + legacy + ": " + ex.Message);
-                        }
-                    }
-                }
+                RewardLayout layout = RelicLayout.FindRewards(original);
+                expectedCount = layout.Names.Length;
+                int[] quantities;
+                List<string> names = RelicHelper.RecognizeRewardCards(original, layout, out quantities);
+                if (names.Count != expectedCount) throw new InvalidOperationException("奖励识别数量与画面卡片数量不一致");
+                EnsureData();
+                return names.Select((name, index) => MakeReward(name, quantities[index])).ToList();
             }
         }
-        throw new InvalidOperationException("无法可靠识别这次中文遗物奖励");
     }
-
-    private static List<string> RecognizeGold(Bitmap image)
-    {
-        int y = (int)(image.Height * 0.3785f);
-        int height = (int)(image.Height * 0.0528f);
-        Rectangle stripArea = new Rectangle(image.Width / 4, y, image.Width / 2, height);
-        string raw;
-        using (Bitmap strip = GoldText(image, stripArea, 1))
-            raw = RelicHelper.RecognizeRawSorted(strip);
-        Debug("gold strip OCR=" + raw.Replace("\r", " ").Replace("\n", " | "));
-        List<string> lines = raw.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
-            .Where(line => line.Count(Char.IsLetterOrDigit) >= 5).ToList();
-        if (lines.Count >= 1 && lines.Count <= 4)
-        {
-            List<string> quick = lines.Select(RelicHelper.ResolveOne).ToList();
-            if (quick.All(name => name != null)) return quick;
-        }
-        return RecognizeCards(image, y, height);
-    }
-
-    private static List<string> RecognizeCards(Bitmap image, int y, int height)
-    {
-        float baseWidth = 1920f * image.Height / 1080f;
-        int width = (int)(0.121f * baseWidth);
-        int gap = (int)(0.0053f * baseWidth);
-        for (int count = 4; count >= 1; count--)
-        {
-            List<Bitmap> pieces = new List<Bitmap>();
-            try
-            {
-                int start = image.Width / 2 - (width * count + gap * (count - 1)) / 2;
-                for (int i = 0; i < count; i++)
-                {
-                    Rectangle area = new Rectangle(start + i * (width + gap), y, width, height);
-                    pieces.Add(GoldText(image, area, 2, 150, 115, 35, 20));
-                    pieces.Add(GoldText(image, area, 1, 95, 72, 17, 8));
-                    pieces.Add(CropAndScale(image, area, 4));
-                }
-                List<string> guesses = RelicHelper.RecognizeRawBatch(pieces);
-                List<string> names = new List<string>();
-                for (int i = 0; i < count; i++)
-                {
-                    string[] observations = guesses.Skip(i * 3).Take(3).ToArray();
-                    names.Add(RelicHelper.ResolveEvidence(observations));
-                    Debug("count=" + count + " card=" + i + " variants=" +
-                        String.Join(" || ", observations.Select(value => value.Replace("\n", " "))) +
-                        " resolved=" + names[i]);
-                }
-                if (names.All(name => name != null)) return names;
-            }
-            finally { foreach (Bitmap piece in pieces) piece.Dispose(); }
-        }
-        throw new InvalidOperationException("仍有中文奖励无法可靠匹配物品词库");
-    }
-
-    private static Bitmap GoldText(Bitmap image, Rectangle area, int scale,
-        int minRed = 115, int minGreen = 90, int redBlue = 25, int greenBlue = 15)
-    {
-        if (area.X < 0 || area.Y < 0 || area.Right > image.Width || area.Bottom > image.Height)
-            throw new InvalidOperationException("奖励文字区域超出截图");
-        using (Bitmap mask = new Bitmap(area.Width, area.Height))
-        {
-            for (int y = 0; y < area.Height; y++)
-                for (int x = 0; x < area.Width; x++)
-                {
-                    Color color = image.GetPixel(area.X + x, area.Y + y);
-                    bool gold = color.R > minRed && color.G > minGreen &&
-                        color.R > color.B + redBlue && color.G > color.B + greenBlue;
-                    mask.SetPixel(x, y, gold ? Color.Black : Color.White);
-                }
-            if (scale == 1) return (Bitmap)mask.Clone();
-            Bitmap enlarged = new Bitmap(area.Width * scale, area.Height * scale);
-            using (Graphics graphics = Graphics.FromImage(enlarged))
-            {
-                graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
-                graphics.DrawImage(mask, new Rectangle(0, 0, enlarged.Width, enlarged.Height));
-            }
-            return enlarged;
-        }
-    }
-
-    private static Bitmap CropAndScale(Bitmap image, Rectangle area, int scale)
-    {
-        Bitmap cropped = new Bitmap(area.Width * scale, area.Height * scale);
-        using (Graphics graphics = Graphics.FromImage(cropped))
-        {
-            graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
-            graphics.DrawImage(image, new Rectangle(0, 0, cropped.Width, cropped.Height),
-                area, GraphicsUnit.Pixel);
-        }
-        return cropped;
-    }
-
-    private static void Debug(string value)
-    {
-        if (Environment.GetEnvironmentVariable("ALECAFRAME_ZH_OCR_DEBUG") == "1")
-            Console.Error.WriteLine(value);
-    }
-
-    private static List<string> RecognizeStrip(Bitmap image, out int estimated)
-    {
-        estimated = 4;
-        Rectangle area = new Rectangle(image.Width / 4, (int)(image.Height * 0.37f),
-            image.Width / 2, (int)(image.Height * 0.065f));
-        using (Bitmap strip = new Bitmap(area.Width, area.Height))
-        using (Graphics graphics = Graphics.FromImage(strip))
-        {
-            graphics.DrawImage(image, new Rectangle(0, 0, strip.Width, strip.Height),
-                area, GraphicsUnit.Pixel);
-            string result = RelicHelper.RecognizeRaw(strip);
-            int count = result.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
-                .Count(line => line.Count(Char.IsLetterOrDigit) >= 5);
-            if (count >= 1 && count <= 4) estimated = count;
-            if (Environment.GetEnvironmentVariable("ALECAFRAME_ZH_OCR_DEBUG") == "1")
-                Console.Error.WriteLine("strip OCR=" + result.Replace("\r", " ").Replace("\n", " | "));
-            return RelicHelper.ResolveLines(result);
-        }
-    }
-
-    private static List<string> Recognize(Bitmap image, int count, bool legacy)
-    {
-        float scale = legacy && image.Height > 1080 ? 0.74f : 1f;
-        float top = legacy ? 0.4027f : 0.38f;
-        float bottom = legacy ? 0.437f : 0.4271f;
-        float fractionWidth = legacy ? 0.1005f : 0.121f;
-        float fractionGap = legacy ? 0.0052f : 0.0053f;
-        top = 0.5f + scale * (top - 0.5f);
-        bottom = 0.5f + scale * (bottom - 0.5f);
-        float baseWidth = 1920f * image.Height / 1080f;
-        int width = (int)(fractionWidth * baseWidth * scale);
-        int gap = (int)(fractionGap * baseWidth * scale);
-        int y = (int)(image.Height * top);
-        int height = (int)(image.Height * bottom) - y;
-        int start = image.Width / 2 - (width * count + gap * (count - 1)) / 2;
-        List<Bitmap> pieces = new List<Bitmap>();
-        try
-        {
-            for (int i = 0; i < count; i++)
-            {
-                int x = start + i * (width + gap);
-                if (x < 0 || x + width > image.Width || y < 0 || y + height > image.Height)
-                    throw new InvalidOperationException("截图区域超出边界");
-                int half = height / 2;
-                foreach (int offset in new[] { 0, half })
-                {
-                    Bitmap piece = new Bitmap(width, half);
-                    using (Graphics graphics = Graphics.FromImage(piece))
-                        graphics.DrawImage(image, new Rectangle(0, 0, width, half),
-                            new Rectangle(x, y + offset, width, half), GraphicsUnit.Pixel);
-                    pieces.Add(piece);
-                }
-            }
-            return RelicHelper.Recognize(pieces);
-        }
-        finally { foreach (Bitmap piece in pieces) piece.Dispose(); }
-    }
-
     private static void EnsureData()
     {
         if (parts != null) return;
@@ -448,7 +271,7 @@ internal static class RelicServer
         }
     }
 
-    private static Reward MakeReward(string english)
+    private static Reward MakeReward(string english, int quantity)
     {
         JObject part;
         if (!parts.TryGetValue(english, out part))
@@ -474,11 +297,12 @@ internal static class RelicServer
         return new Reward
         {
             englishName = (string)part.SelectToken("drops[0].type") ?? english,
-            name = RelicHelper.GetDisplayName((string)part.SelectToken("drops[0].type") ?? english,
+            name = (quantity > 1 ? quantity + "× " : "") + RelicHelper.GetDisplayName((string)part.SelectToken("drops[0].type") ?? english,
                 String.IsNullOrEmpty(baseZh) ? english : baseZh + " " + suffix),
             internalName = partKey,
             parentName = parent == null ? null : (string)parent["name"],
             parentInternalName = parentKey,
+            quantity = quantity,
             ducats = part["ducats"] == null ? -1 : (int)part["ducats"],
             totalToOwn = count,
             isItemVaulted = parent != null && parent["vaulted"] != null && (bool)parent["vaulted"]

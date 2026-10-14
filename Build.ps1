@@ -25,7 +25,7 @@ $jsonReference = "/reference:$(Join-Path $output 'Newtonsoft.Json.dll')"
 $helper = Join-Path $output "AlecaFrameZh.RelicHelper.dll"
 $server = Join-Path $output "AlecaFrameZhRelicServer.exe"
 & $compiler /nologo /target:library /optimize+ "/out:$helper" `
-    /reference:System.Drawing.dll $jsonReference (Join-Path $sources "RelicHelper.cs") (Join-Path $itemNamesRoot "ItemNames.cs")
+    /reference:System.Drawing.dll $jsonReference (Join-Path $sources "RelicHelper.cs") (Join-Path $sources "RelicLayout.cs") (Join-Path $itemNamesRoot "ItemNames.cs")
 if ($LASTEXITCODE -ne 0) { throw "RelicHelper 编译失败。" }
 & $compiler /nologo /target:exe /optimize+ "/out:$server" `
     /reference:System.Drawing.dll /reference:System.IO.Compression.dll `
