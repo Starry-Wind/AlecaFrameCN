@@ -10,6 +10,7 @@
     var scheduled = false;
     var itemNames = Object.create(null);
     var itemAliases = Object.create(null);
+    var rivenWeaponNames = [];
     var marketNames = new WeakMap();
     var sourceTexts = new WeakMap();
     var sourceAttributes = new WeakMap();
@@ -17,6 +18,7 @@
     var relicEras = { lith: "古纪", meso: "前纪", neo: "中纪", axi: "后纪", requiem: "安魂", vanguard: "先锋", void: "虚空" };
     var relicTiers = { intact: "完整", exceptional: "优良", flawless: "无瑕", radiant: "光辉", int: "完整", exc: "优良", fla: "无瑕", rad: "光辉" };
     Object.assign(translations, {
+        "Select a weapon": "选择武器", "List on WFMarket": "发布到 WFMarket", "Edit contract": "修改合约",
         "Loading relics...": "正在加载遗物……",
         "Push your current filters to the overlay.": "将当前筛选条件应用到遗物推荐叠加层。",
         "The current filters will now be used in the overlay": "当前筛选条件已应用到遗物推荐叠加层",
@@ -27,6 +29,305 @@
         "WFMarket order placed": "已在 WFMarket 发布订单",
         "Common": "常见", "Uncommon": "罕见", "Rare": "稀有"
     });
+
+    // Riven labels follow the supplied effect/prefix/suffix table. Extra rows
+    // cover attributes in the installed game's current Riven catalogue.
+    // Values, trait IDs, API payloads and Vue models remain in their original form.
+    var rivenContext = "#veiledStashTab, #unveiledStashTab, #rivenFinderTab, #rivenSniperTab, .rivenDetails, .rivenOverlayExternal, .rivenTrait, .similarRivenAttr, .rivenDetailsStatText, .goodAttrMandatory, .goodAttrOptional, .badAttrItem";
+    var rivenStatContext = ".rivenTrait, .rivenDetailsStatText, .similarRivenAttr, .attrName, .goodAttrMandatory, .goodAttrOptional, .badAttrItem, .rivenFinderAttrSelectAttr option";
+    var rivenTraits = [
+        ["Critical Chance (x2 for Heavy Attacks)", "暴击几率（重击翻倍）", "crita", "cron", "暴率"],
+        ["Critical Chance for Slide Attack", "滑行攻击暴击几率", "pleci", "nent", "滑暴"],
+        ["Critical Chance", "暴击几率", "crita", "cron", "暴率"],
+        ["Critical Damage", "暴击伤害", "acri", "tis", "暴伤"],
+        ["Fire Rate (x2 for Bows)", "射速（弓类武器翻倍）", "croni", "dra", "速度"],
+        ["Attack Speed", "攻击速度", "croni", "dra", "速度"],
+        ["Fire Rate", "射速", "croni", "dra", "速度"],
+        ["Damage to Corpus", "对 Corpus 伤害", "manti", "tron", "C伤"],
+        ["Damage to Grineer", "对 Grineer 伤害", "argi", "con", "G伤"],
+        ["Damage to Infested", "对 Infested 伤害", "pura", "ada", "I伤"],
+        ["Damage to Orokin", "对 Orokin 伤害", "effi", "tas", "O伤"],
+        ["Damage to Techrot", "对 Techrot 伤害", "muti", "gia", "科腐伤"],
+        ["Damage to Scaldra", "对 Scaldra 伤害", "exsi", "llo", "炽蛇伤"],
+        ["Ammo Maximum", "弹药最大值", "ampi", "bin", "弹药"],
+        ["Magazine Capacity", "弹匣容量", "arma", "tin", "弹匣"],
+        ["Cold", "冰冻伤害", "geli", "do", "冰冻"],
+        ["Toxin", "毒素伤害", "toxi", "tox", "毒素"],
+        ["Electricity", "电击伤害", "vexi", "tio", "电击"],
+        ["Heat", "火焰伤害", "igni", "pha", "火焰"],
+        ["Impact", "冲击伤害", "magna", "ton", "冲击"],
+        ["Slash", "切割伤害", "sci", "sus", "切割"],
+        ["Puncture", "穿刺伤害", "insi", "cak", "穿刺"],
+        ["Status Chance", "触发几率", "hexa", "dex", "触发"],
+        ["Status Duration", "触发时间", "deci", "des", "触时"],
+        ["Melee Damage on Heavy Attack", "重击近战伤害", "", "", "重击伤害"],
+        ["Melee Damage", "近战伤害", "", "", "伤害"],
+        ["Damage", "基础伤害", "visi", "ata", "伤害"],
+        ["Finisher Damage", "处决伤害", "exi", "cta", "处决"],
+        ["Projectile Speed", "投射物飞行速度", "conci", "nak", "弹速"],
+        ["Heavy Attack Efficiency", "重击效率", "forti", "us", "重击效率"],
+        ["Multishot", "多重射击", "sati", "can", "多重"],
+        ["Punch Through", "穿透", "lexi", "nok", "穿透"],
+        ["Reload Speed", "装填速度", "feva", "tak", "装填"],
+        ["Combo Duration", "连击持续时间", "tempi", "nem", "连击时间"],
+        ["Initial Combo", "初始连击", "para", "um", "初始连击"],
+        ["Additional Combo Count Chance", "额外连击数几率", "laci", "nus", "连击数"],
+        ["Chance to Gain Combo Count", "获得连击数几率", "", "", "连击数"],
+        ["Chance to not Gain Combo Count", "不获得连击数几率", "", "", "连击数"],
+        ["Weapon Recoil", "后坐力", "zeti", "mag", "后坐"],
+        ["Range", "范围", "locti", "tor", "范围"],
+        ["Zoom", "变焦", "hera", "lis", "变焦"],
+        ["Weak Point Critical Chance", "弱点暴击几率", "exiti", "eus", "弱点暴率"],
+        ["Weak Point Damage", "弱点伤害", "eni", "vo", "弱点伤害"],
+        ["Ammo Efficiency", "弹药效率", "parci", "pia", "弹药效率"],
+        ["Status Damage", "异常状态伤害", "plaga", "mna", "异常伤害"],
+        ["Gas", "毒气伤害", "cali", "fel", "毒气"],
+        ["Corrosive", "腐蚀伤害", "cori", "or", "腐蚀"],
+        ["Viral", "病毒伤害", "cari", "sco", "病毒"],
+        ["Radiation", "辐射伤害", "radi", "lo", "辐射"],
+        ["Blast", "爆炸伤害", "fraga", "tus", "爆炸"],
+        ["Magnetic", "磁力伤害", "magni", "bra", "磁力"],
+        ["Heavy Attack Wind Up Speed", "重击蓄力速度", "", "", "重击蓄力"],
+        ["Parry Angle", "格挡角度", "", "", "格挡"],
+        ["Slam Attack Damage", "震地攻击伤害", "", "", "震地"],
+        ["Magazine Reloaded/s when Holstered", "收起武器时每秒装填弹匣比例", "", "", "自动装填"]
+    ];
+    var rivenLabels = Object.create(null);
+    var rivenPrefixes = Object.create(null);
+    var rivenSuffixes = Object.create(null);
+    rivenTraits.forEach(function (row) {
+        rivenLabels[row[0].toLowerCase()] = row[1];
+        if (row[2] && !rivenPrefixes[row[2]]) rivenPrefixes[row[2]] = row;
+        if (row[3] && !rivenSuffixes[row[3]]) rivenSuffixes[row[3]] = row;
+    });
+    rivenPrefixes.tempion = rivenPrefixes.tempi;
+    function escapePattern(value) { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+    var rivenLabelPattern = new RegExp("\\b(?:" + rivenTraits.map(function (row) { return row[0]; })
+        .sort(function (a, b) { return b.length - a.length; }).map(escapePattern).join("|") + ")(?![A-Za-z])", "gi");
+    var rivenNameContext = ".veiledRivenName, .rivenDetailsName, .rivenWeaponNameRivenName";
+    var rivenGradeLabels = { Bad: "较差", HasPotential: "有潜力", Good: "优秀", Perfect: "极品", Unknown: "未评级" };
+    var rivenCategories = { rifle: "步枪", shotgun: "霰弹枪", pistol: "手枪", melee: "近战", kitgun: "组合枪", zaw: "自制近战武器", arch: "Archwing枪械", archwing: "Archwing枪械" };
+    var rivenChallenges = [
+        ["Kill |COUNT| Enemies", "击杀|COUNT|名敌人"],
+        ["Kill |COUNT| Enemies with Headshots", "爆头击杀|COUNT|名敌人"],
+        ["Get the killing blow on |COUNT| Sentients", "给予|COUNT|名 Sentient 最后一击"],
+        ["Kill |COUNT| Enemies with Finishers", "使用处决击杀|COUNT|名敌人"],
+        ["Kill |COUNT| Enemies while Sliding", "滑行时击杀|COUNT|名敌人"],
+        ["Complete an Extermination mission with level 30 or higher enemies without being detected", "在不被发现的情况下完成敌人等级至少为30级的歼灭任务"],
+        ["Complete a Defense mission with level 30 or higher enemies with the defense objective taking no damage", "完成敌人等级至少为30级的防御任务，且防御目标不受伤害"],
+        ["Complete a Survival mission with level 30 or higher enemies without killing anyone", "不击杀任何敌人，完成敌人等级至少为30级的生存任务"],
+        ["Complete a Solo Interception mission with level 30 or higher enemies and a Hobbled Dragon Key equipped", "装备蹒跚龙钥，单人完成敌人等级至少为30级的拦截任务"],
+        ["Pick up |COUNT| Syndicate Medallions", "拾取|COUNT|枚集团勋章"],
+        ["Find |COUNT| Caches", "找到|COUNT|个资源储藏舱"],
+        ["Get |COUNT| Headshot kills in a single Aim Glide", "在一次瞄准滑翔中爆头击杀|COUNT|名敌人"],
+        ["Get |COUNT| kills in a row while Wall Dashing or Wall Latching without touching the floor", "蹬墙或攀附期间连续击杀|COUNT|名敌人，且不触地"],
+        ["Sustain a 6x Melee Combo Multiplier for 30s", "保持6倍近战连击倍率30秒"],
+        ["Synthesize a Simaris target without using Traps or Abilities while having a Hobbled Dragon Key equipped", "装备蹒跚龙钥，不使用陷阱或技能，完成 Simaris 目标结合扫描"],
+        ["Kill |COUNT| Dargyn Pilots before they hit the ground", "在 Dargyn 驾驶员落地前击杀|COUNT|名"],
+        ["Kill |COUNT| unalerted Tusk Ballistas with a Headshot", "爆头击杀|COUNT|名未警觉的 Tusk Ballista"],
+        ["Destroy |COUNT| Dargyns in flight using a bow", "使用弓摧毁|COUNT|架飞行中的 Dargyn"],
+        ["Kill |COUNT| Enemies with Headshots from at least 75m away", "从至少75米外爆头击杀|COUNT|名敌人"],
+        ["Land |COUNT| consecutive headshots while in Archwing in the Plains of Eidolon", "在夜灵平野使用 Archwing 飞行时连续爆头|COUNT|次"],
+        ["Destroy |COUNT| Vruush Turrets while in Archwing without dying or becoming downed", "使用 Archwing 摧毁|COUNT|座 Vruush 炮塔，且不死亡或倒地"],
+        ["Catch |COUNT| fish without missing a throw", "捕获|COUNT|条鱼，且每次投掷均命中"],
+        ["Kill |COUNT| Enemies that are on a Dropship", "击杀|COUNT|名运输船上的敌人"],
+        ["Catch one fish, mine one gem or metal, and kill one enemy in 30 seconds", "在30秒内捕鱼、开采宝石或矿石、击杀敌人各一次"]
+    ].sort(function (a, b) { return b[0].length - a[0].length; });
+    var rivenComplications = {
+        "without taking damage": "不受伤害", "without dying or becoming downed": "不死亡或倒地",
+        "without being disrupted by a": "不受到", "Magnetic Status Effect": "磁力异常状态干扰", "Magnetic Damage": "磁力伤害干扰",
+        "without getting afflicted by a Status Effect": "不受异常状态影响", "without an ally becoming downed": "没有队友倒地",
+        "with an Extinguished Dragon Key equipped": "装备熄灭龙钥", "with a Bleeding Dragon Key equipped": "装备残血龙钥",
+        "with a Decaying Dragon Key equipped": "装备腐朽龙钥", "with a Hobbled Dragon Key equipped": "装备蹒跚龙钥",
+        "without using health consumables": "不使用生命回复道具", "without using shield-restoring consumables": "不使用护盾回复道具",
+        "without using ammo consumables": "不使用弹药回复道具", "without using energy consumables": "不使用能量回复道具",
+        "in one day": "在一天内", "while undetected": "在未被发现时", "while sliding": "在滑行时",
+        "during Aim Glide": "在瞄准滑翔时", "while Aim Glide": "在瞄准滑翔时", "without raising any alarms": "不触发警报",
+        "without failing a mission": "不导致任务失败", "while alone or in Solo Mode": "独自或在单人模式下",
+        "while invisible": "在隐身时", "with an active pet present": "携带存活的宠物", "with an active sentinel present": "携带存活的守护",
+        "without using ciphers": "不使用破解器", "without using air support": "不使用空中支援"
+    };
+    var rivenComplicationPattern = new RegExp(Object.keys(rivenComplications)
+        .sort(function (a, b) { return b.length - a.length; }).map(escapePattern).join("|"), "gi");
+    Object.assign(translations, {
+        "Unseen (???) rivens": "尚未显示挑战的紫卡", "Equip these rivens to reveal their challenge": "装备这些紫卡以显示揭示挑战",
+        "Unknown complication": "未知附加条件", "Notification added!": "已添加监控通知！", "Notification removed!": "已移除监控通知！",
+        "Notification status updated!": "已更新监控通知状态！", "Notification settings updated!": "已更新监控通知设置！",
+        "Listing edited!": "已修改挂单！", "Listing created!": "已创建挂单！",
+        "Generating import string. This might take a few seconds...": "正在生成导入代码，请稍候……",
+        "Import string copied to clipboard and page opened!": "导入代码已复制到剪贴板，并已打开导入页面！",
+        "Riven details opened in the main desktop window": "已在桌面主窗口打开紫卡详情"
+    });
+
+    function rivenNameRows(key) {
+        if (!/^[A-Za-z]+(?:-[A-Za-z]+)?$/.test(key)) return null;
+        function twoTraits(part) {
+            var candidates = Object.keys(rivenPrefixes).map(function (prefix) {
+                var suffix = part.slice(prefix.length);
+                return part.indexOf(prefix) === 0 && rivenSuffixes[suffix] && rivenPrefixes[prefix] !== rivenSuffixes[suffix] ?
+                    [rivenPrefixes[prefix], rivenSuffixes[suffix]] : null;
+            }).filter(Boolean);
+            return candidates.length === 1 ? candidates[0] : null;
+        }
+        var parts = key.toLowerCase().split("-");
+        var rows = parts.length === 1 ? twoTraits(parts[0]) : null;
+        if (parts.length === 2 && rivenPrefixes[parts[0]]) {
+            var remainder = twoTraits(parts[1]);
+            if (remainder) rows = [rivenPrefixes[parts[0]]].concat(remainder);
+            else if (rivenSuffixes[parts[1]]) rows = [rivenPrefixes[parts[0]], rivenSuffixes[parts[1]]];
+        }
+        return rows;
+    }
+
+    function rivenNamePair(key, element) {
+        if (!element.closest(rivenNameContext) || element.closest(".rivenWeaponNameWeapon")) return null;
+        var rows = rivenNameRows(key);
+        if (!rows) return null;
+        var title = key + "：" + rows.map(function (row) { return row[1]; }).join("／");
+        var heading = element.closest(rivenNameContext);
+        setAttribute(heading, "data-zh-riven-name", "true");
+        setAttribute(heading, "title", title);
+        return rows.map(function (row) { return row[4]; }).join("·");
+    }
+
+    function rivenText(key, element) {
+        if (!element || !element.closest(rivenContext)) return null;
+        var name = rivenNamePair(key, element);
+        if (name) return name;
+        if (element.closest(".sniperWeaponName")) {
+            var weapon = key.match(/^\((.+)\)$/);
+            var weaponPair = weapon && itemPair(weapon[1]);
+            if (weaponPair) return "（" + weaponPair.zh + "）";
+        }
+        var category = key.match(/^(Rifle|Shotgun|Pistol|Melee|Kitgun|Zaw|Arch(?:wing)?)(\s+Riven(?:\s+Mod)?(?:\s+\(Veiled\))?)?$/i);
+        if (category) return rivenCategories[category[1].toLowerCase()] + (category[2] ? "紫卡" : "");
+        if (/^MR:\s*\d+$/i.test(key)) return key.replace(/^MR:\s*/i, "段位：");
+        var legend = { Bad: "较差", OK: "尚可", Good: "优秀", Great: "极品" };
+        if (element.closest(".rivenOverlayGradeName") && legend[key]) return legend[key];
+        var translated = key;
+        if (element.closest(".veiledRivenChallenge, .itemGroupName") && !element.closest(rivenStatContext)) {
+            for (var i = 0; i < rivenChallenges.length; i++) {
+                var row = rivenChallenges[i];
+                var pattern = new RegExp("^" + escapePattern(row[0]).replace("\\|COUNT\\|", "(\\d[\\d,]*)") + "(?=$|[\\s,])", "i");
+                var match = translated.match(pattern);
+                if (match) { translated = translated.replace(pattern, row[1].replace("|COUNT|", match[1] || "")); break; }
+                var group = row[0].replace("|COUNT| ", "");
+                if (translated.toLowerCase() === group.toLowerCase()) {
+                    translated = row[1].replace(/\|COUNT\|[名枚个架座条次]?/, ""); break;
+                }
+            }
+            translated = translated.replace(rivenComplicationPattern, function (value) {
+                var original = Object.keys(rivenComplications).find(function (phrase) { return phrase.toLowerCase() === value.toLowerCase(); });
+                return rivenComplications[original];
+            }).replace(/\(Unknown complication\)/g, "（未知附加条件）");
+        } else if (element.closest(rivenStatContext)) {
+            translated = translated.replace(rivenLabelPattern, function (value) { return rivenLabels[value.toLowerCase()]; });
+            translated = translated.replace(/(\d(?:[\d.,]*))s(?=\s|$)/g, "$1秒");
+        }
+        return translated !== key ? translated : null;
+    }
+
+    function installRivenChartBridge() {
+        var official = window.refreshPlatinumChart;
+        if (typeof official !== "function" || official.__alecaFrameZhRiven) return;
+        var translated = function () {
+            var result = official.apply(this, arguments);
+            var chart = window.rivenPlatinumChart;
+            if (chart) {
+                chart.data.datasets.forEach(function (dataset) {
+                    if (dataset.label === "Average") dataset.label = "平均价格";
+                    if (dataset.label === "Base") dataset.label = "基础价格";
+                });
+                var axis = chart.options.scales.x;
+                if (axis.time) {
+                    axis.time.tooltipFormat = "yyyy年M月d日";
+                    axis.time.displayFormats = Object.assign({}, axis.time.displayFormats, { month: "yyyy年M月", day: "M月d日" });
+                }
+                chart.update("none");
+            }
+            return result;
+        };
+        translated.__alecaFrameZhRiven = true;
+        window.refreshPlatinumChart = translated;
+    }
+
+    function loadRivenWeaponNames() {
+        var io = window.overwolf && overwolf.io;
+        if (!io || !io.paths || !io.enums) return;
+        io.readFileContents(io.paths.localAppData + "/AlecaFrame/cachedData/custom/rivens.json", io.enums.eEncoding.UTF8, function (result) {
+            if (!result.success) return;
+            try {
+                var weapons = JSON.parse(result.content).weaponStats || {};
+                rivenWeaponNames = Array.from(new Set(Object.keys(weapons).map(function (id) { return weapons[id]; })
+                    .filter(function (weapon) { return weapon.rivenUID && weapon.name; }).map(function (weapon) { return weapon.name; })));
+            } catch (error) { console.warn("[AlecaFrame 中文紫卡] 武器名称索引读取失败", error); }
+        });
+    }
+
+    function localizedWeaponName(name) {
+        var pair = itemPair(name || "");
+        return pair ? pair.zh : name || "";
+    }
+
+    function installRivenSearchBridges() {
+        var stash = window.unveiledRivensApp;
+        if (stash && !stash.refresh.__alecaFrameZhRiven) {
+            var stashGeneration = 0;
+            var stashRefresh = function (loadingEnabled) {
+                var query = stash.selectedSearch;
+                var generation = ++stashGeneration;
+                var chinese = /[\u3400-\u9fff]/.test(query);
+                var filters = { type: stash.selectedCategory.toLowerCase(), search: chinese ? "" : query, order: stash.selectedOrderingMode,
+                    orderLargerToSmaller: stash.selectedOrderingLargerToSmaller, yesnoFilters: "{}" };
+                var loading = loadingEnabled !== false || stash.loading;
+                if (loading) stash.loading = true;
+                plugin.get().GetFilteredUnveiledRivensInfo(JSON.stringify(filters), function (success, data) {
+                    if (generation !== stashGeneration) return;
+                    var key = itemKey(query);
+                    var items = success ? JSON.parse(data) : [];
+                    stash.items = chinese ? items.filter(function (riven) {
+                        var rows = rivenNameRows(riven.name || "") || [];
+                        var names = [riven.weaponName, localizedWeaponName(riven.weaponName), riven.name,
+                            rows.map(function (row) { return row[1]; }).join("·"), rows.map(function (row) { return row[4]; }).join("·")];
+                        return names.some(function (name) { return itemKey(name || "").indexOf(key) !== -1; });
+                    }) : items;
+                    stash.noItems = stash.items.length === 0;
+                    if (loading) setTimeout(function () {
+                        if (generation === stashGeneration) stash.loading = false;
+                    }, success ? 225 : 350);
+                });
+            };
+            stashRefresh.__alecaFrameZhRiven = true;
+            stash.refresh = stashRefresh;
+        }
+        var finder = window.rivenFinderApp;
+        if (finder && !finder.refreshWeaponSearch.__alecaFrameZhRiven) {
+            var originalWeaponSearch = finder.refreshWeaponSearch;
+            var searchGeneration = 0;
+            var weaponSearch = function () {
+                var query = finder.weaponSearchString;
+                var generation = ++searchGeneration;
+                if (!/[\u3400-\u9fff]/.test(query)) return originalWeaponSearch.apply(finder, arguments);
+                var key = itemKey(query);
+                var candidates = rivenWeaponNames.length ? rivenWeaponNames : Object.keys(itemNames).map(function (name) { return itemNames[name].en; });
+                var queries = Array.from(new Set(candidates.filter(function (name) { return itemKey(localizedWeaponName(name)).indexOf(key) !== -1; }))).slice(0, 25);
+                if (!queries.length) { finder.weaponSearchData = []; return; }
+                var remaining = queries.length;
+                var results = new Map();
+                queries.forEach(function (english) {
+                    plugin.get().GetRivenWeapons(english, function (success, data) {
+                        if (generation !== searchGeneration) return;
+                        if (success) JSON.parse(data).forEach(function (weapon) {
+                            if (itemKey(localizedWeaponName(weapon.name)).indexOf(key) !== -1) results.set(weapon.uniqueID, weapon);
+                        });
+                        if (--remaining === 0) finder.weaponSearchData = Array.from(results.values()).sort(function (a, b) { return a.name.localeCompare(b.name); }).slice(0, 25);
+                    });
+                });
+            };
+            weaponSearch.__alecaFrameZhRiven = true;
+            finder.refreshWeaponSearch = weaponSearch;
+        }
+    }
 
     function itemKey(value) {
         return value.trim().replace(/\s+/g, " ").toLowerCase();
@@ -140,6 +441,7 @@
             Object.keys(data.aliases || {}).forEach(function (alias) {
                 itemAliases[itemKey(alias)] = itemKey(data.aliases[alias]);
             });
+            loadRivenWeaponNames();
             walk(document.body);
             console.info("[AlecaFrame 中文物品] 已加载 " + data.sourceRows + " 条对照及官方补充词库；市场名称支持点击切换");
             console.info("[AlecaFrame 中文遗物] 遗物名称、精炼等级与规划提示已加载");
@@ -149,6 +451,8 @@
     function lookup(raw, element) {
         var key = raw.trim().replace(/\s+/g, " ");
         if (!key || key.indexOf("{{") !== -1) return null;
+        var riven = rivenText(key, element);
+        if (riven !== null) return riven;
         if (element && element.closest(".topSetting.relicPlanner, #tooltipFiltersRelicPlannerTemplate")) {
             var era = relicEras[key.toLowerCase()];
             if (era) return era;
@@ -168,6 +472,10 @@
         if (progress) return "正在加载遗物（" + progress[1] + "/" + progress[2] + "）……";
         var match = key.match(/^(\d+) new items found$/);
         if (match) return "发现 " + match[1] + " 件新物品";
+        if (key.indexOf("An error has occurred:") === 0) return key.replace("An error has occurred:", "发生错误：");
+        var errors = { "Failed to remove notification:": "移除监控通知失败：", "Failed to update notification status:": "更新监控通知状态失败：", "Failed to update notification settings:": "更新监控通知设置失败：" };
+        var prefix = Object.keys(errors).find(function (value) { return key.indexOf(value) === 0; });
+        if (prefix) return key.replace(prefix, errors[prefix]);
         return null;
     }
 
@@ -228,6 +536,18 @@
 
     function elementAttributes(element) {
         if (element.closest(marketNameSelector)) return;
+        if (element.matches(".rivenGradeSmall")) {
+            var grade = Object.keys(rivenGradeLabels).find(function (key) { return element.classList.contains(key); });
+            if (grade) {
+                setAttribute(element, "title", "紫卡评分：" + rivenGradeLabels[grade]);
+                setAttribute(element, "aria-label", "紫卡评分：" + rivenGradeLabels[grade]);
+            }
+        }
+        if (element.matches(".rivenRollGrade")) {
+            var attributeGrades = { Decisive: "关键", Good: "有益", NotHelping: "提升有限", Bad: "不利", Unknown: "未评级" };
+            var attributeGrade = Object.keys(attributeGrades).find(function (key) { return element.classList.contains(key); });
+            if (attributeGrade) setAttribute(element, "title", "属性评价：" + attributeGrades[attributeGrade]);
+        }
         // Vue can replace the overlay button after the official tooltip was
         // attached. Restore its Chinese help on the button that is displayed.
         if (element.id === "pushToRelicRecommendationOverlay" && typeof window.tippy === "function" && !element._tippy) {
@@ -272,6 +592,8 @@
 
     function flush() {
         scheduled = false;
+        installRivenChartBridge();
+        installRivenSearchBridges();
         if (pending.size > 200) {
             pending.clear();
             walk(document.body);
@@ -295,9 +617,11 @@
         document.documentElement.lang = "zh-CN";
         if (!document.body) return;
         installInventoryMarketBridge();
+        installRivenChartBridge();
+        installRivenSearchBridges();
         walk(document.body);
         var style = document.createElement("style");
-        style.textContent = '[data-zh-toggle="true"]{cursor:pointer}[data-zh-toggle="true"]:hover{text-decoration:underline}[data-zh-toggle="true"]:focus-visible{outline:1px solid currentColor;outline-offset:3px}';
+        style.textContent = '[data-zh-toggle="true"]{cursor:pointer}[data-zh-toggle="true"]:hover{text-decoration:underline}[data-zh-toggle="true"]:focus-visible{outline:1px solid currentColor;outline-offset:3px}.veiledRivenName[data-zh-riven-name="true"]{height:auto;min-height:31px;flex-wrap:wrap;gap:2px 5px;padding:4px 36px 4px 6px;font-size:14px;line-height:1.35}.rivenDetailsName[data-zh-riven-name="true"]{overflow-wrap:anywhere}.rivenSelectGroup{white-space:nowrap;flex-shrink:0}.rivenDetails .buttonSettingsTest.importCode{width:auto;min-width:156px;white-space:nowrap}#veiledStashTab .veiledRivenChallenge,.veiledRivenChallenge.unveiled{height:auto;min-height:85px;max-height:none}';
         document.head.appendChild(style);
         document.addEventListener("click", toggleMarketName, true);
         document.addEventListener("keydown", toggleMarketName, true);
@@ -316,6 +640,7 @@
             subtree: true
         });
         console.info("[AlecaFrame 中文补丁] 已加载");
+        console.info("[AlecaFrame 中文紫卡] 属性、随机词缀、揭示挑战、查找器、监控器与叠加层汉化已加载");
         if (/\/main\.html$/i.test(location.pathname)) {
             try {
                 if (plugin.get().GetTradeDisplayNamesZH("[]") === "{}") {
